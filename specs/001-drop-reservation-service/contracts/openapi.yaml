@@ -1,0 +1,249 @@
+openapi: 3.0.3
+info:
+  title: KIBO Limited Drop Reservation Service
+  version: 1.0.0
+  description: |
+    Customers browse limited drops, place time-limited holds, and confirm or cancel them.
+    Unconfirmed holds expire automatically. Errors use RFC 7807 Problem Details with a stable `code`.
+servers:
+  - url: /api/v1
+tags:
+  - name: Drops
+  - name: Holds
+
+paths:
+  /drops:
+    get:
+      tags: [Drops]
+      summary: List drops
+      description: Availability may be up to 5s stale (cached). Hold decisions always use live data.
+      responses:
+        '200':
+          description: All drops
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/DropResponse' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
+  /drops/{dropId}:
+    get:
+      tags: [Drops]
+      summary: Get a drop
+      parameters: [ { $ref: '#/components/parameters/DropId' } ]
+      responses:
+        '200':
+          description: The drop
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DropResponse' }
+        '404': { $ref: '#/components/responses/DropNotFound' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
+  /drops/{dropId}/holds:
+    post:
+      tags: [Holds]
+      summary: Place a hold on units of a drop
+      description: |
+        All-or-nothing. `Idempotency-Key` is required. Replaying the same key with the same drop and
+        quantity returns the original hold (200) without consuming more units. Reusing the key with
+        different details returns 409 IDEMPOTENCY_KEY_CONFLICT.
+      parameters:
+        - { $ref: '#/components/parameters/DropId' }
+        - { $ref: '#/components/parameters/CustomerId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateHoldRequest' }
+      responses:
+        '201':
+          description: Hold created (ACTIVE)
+          headers:
+            Location: { schema: { type: string }, description: "/api/v1/holds/{holdId}" }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HoldResponse' }
+        '200':
+          description: Idempotent replay. Returns the original hold in its current state.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HoldResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '404': { $ref: '#/components/responses/DropNotFound' }
+        '409':
+          description: INSUFFICIENT_INVENTORY | DROP_NOT_RELEASED | IDEMPOTENCY_KEY_CONFLICT
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+              examples:
+                insufficient:
+                  value: { type: about:blank, title: Insufficient inventory, status: 409,
+                           detail: "Requested 3 units but only 2 are available",
+                           code: INSUFFICIENT_INVENTORY, availableQuantity: 2,
+                           timestamp: "2026-10-06T10:00:00Z", instance: /api/v1/drops/1/holds }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
+  /holds/{holdId}:
+    get:
+      tags: [Holds]
+      summary: Get a hold
+      description: An ACTIVE hold past its expiry time is reported as EXPIRED. Another customer's hold returns 404.
+      parameters:
+        - { $ref: '#/components/parameters/HoldId' }
+        - { $ref: '#/components/parameters/CustomerId' }
+      responses:
+        '200':
+          description: The hold
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HoldResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '404': { $ref: '#/components/responses/HoldNotFound' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
+  /holds/{holdId}/confirm:
+    post:
+      tags: [Holds]
+      summary: Confirm an ACTIVE hold before it expires
+      description: Repeating confirm on a CONFIRMED hold returns 200 with no change.
+      parameters:
+        - { $ref: '#/components/parameters/HoldId' }
+        - { $ref: '#/components/parameters/CustomerId' }
+      responses:
+        '200':
+          description: Hold is CONFIRMED
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HoldResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '404': { $ref: '#/components/responses/HoldNotFound' }
+        '409': { $ref: '#/components/responses/HoldConflict' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
+  /holds/{holdId}/cancel:
+    post:
+      tags: [Holds]
+      summary: Cancel an ACTIVE hold and return its units
+      description: Repeating cancel on a CANCELLED hold returns 200 with no change.
+      parameters:
+        - { $ref: '#/components/parameters/HoldId' }
+        - { $ref: '#/components/parameters/CustomerId' }
+      responses:
+        '200':
+          description: Hold is CANCELLED
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HoldResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '404': { $ref: '#/components/responses/HoldNotFound' }
+        '409': { $ref: '#/components/responses/HoldConflict' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
+components:
+  parameters:
+    DropId:
+      name: dropId
+      in: path
+      required: true
+      schema: { type: integer, format: int64, minimum: 1 }
+    HoldId:
+      name: holdId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    CustomerId:
+      name: X-Customer-Id
+      in: header
+      required: true
+      description: Opaque customer reference (no authentication in v1). Must match the hold's owner.
+      schema: { type: string, minLength: 1, maxLength: 64, pattern: '^[A-Za-z0-9._:-]+$' }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: Unique per customer; makes retries safe.
+      schema: { type: string, minLength: 1, maxLength: 64, pattern: '^[A-Za-z0-9._:-]+$' }
+
+  schemas:
+    DropResponse:
+      type: object
+      required: [id, name, totalQuantity, availableQuantity, maxPerHold, startsAt, availabilityStatus]
+      properties:
+        id: { type: integer, format: int64 }
+        name: { type: string }
+        description: { type: string, nullable: true }
+        totalQuantity: { type: integer }
+        availableQuantity: { type: integer, description: May be up to 5s stale }
+        maxPerHold: { type: integer }
+        startsAt: { type: string, format: date-time }
+        availabilityStatus: { type: string, enum: [UPCOMING, OPEN, SOLD_OUT] }
+
+    CreateHoldRequest:
+      type: object
+      required: [quantity]
+      properties:
+        quantity: { type: integer, minimum: 1, description: "≤ the drop's maxPerHold" }
+
+    HoldResponse:
+      type: object
+      required: [id, dropId, quantity, status, createdAt, expiresAt]
+      properties:
+        id: { type: string, format: uuid }
+        dropId: { type: integer, format: int64 }
+        quantity: { type: integer }
+        status: { type: string, enum: [ACTIVE, CONFIRMED, CANCELLED, EXPIRED] }
+        createdAt: { type: string, format: date-time }
+        expiresAt: { type: string, format: date-time }
+        resolvedAt: { type: string, format: date-time, nullable: true }
+
+    Problem:
+      type: object
+      description: RFC 7807 Problem Details (application/problem+json) with extension members.
+      required: [status, title, code, timestamp]
+      properties:
+        type: { type: string, default: about:blank }
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }
+        instance: { type: string }
+        code:
+          type: string
+          enum: [VALIDATION_ERROR, DROP_NOT_FOUND, HOLD_NOT_FOUND, DROP_NOT_RELEASED,
+                 INSUFFICIENT_INVENTORY, HOLD_EXPIRED, INVALID_STATE_TRANSITION,
+                 IDEMPOTENCY_KEY_CONFLICT, SERVICE_UNAVAILABLE, INTERNAL_ERROR]
+        timestamp: { type: string, format: date-time }
+        currentStatus: { type: string, description: For HOLD_EXPIRED / INVALID_STATE_TRANSITION }
+        availableQuantity: { type: integer, description: For INSUFFICIENT_INVENTORY }
+        errors:
+          type: array
+          description: Field errors for VALIDATION_ERROR
+          items:
+            type: object
+            properties:
+              field: { type: string }
+              message: { type: string }
+
+  responses:
+    ValidationError:
+      description: VALIDATION_ERROR (missing or invalid header, body or parameter)
+      content:
+        application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } }
+    DropNotFound:
+      description: DROP_NOT_FOUND
+      content:
+        application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } }
+    HoldNotFound:
+      description: HOLD_NOT_FOUND (unknown id, malformed id, or another customer's hold)
+      content:
+        application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } }
+    HoldConflict:
+      description: HOLD_EXPIRED | INVALID_STATE_TRANSITION (includes currentStatus)
+      content:
+        application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } }
+    ServiceUnavailable:
+      description: SERVICE_UNAVAILABLE (database unreachable or lock retries exhausted). Safe to retry.
+      content:
+        application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } }
