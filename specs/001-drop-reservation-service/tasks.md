@@ -27,15 +27,15 @@ Write each story's tests first and make sure they fail before implementing.
 
 **Purpose**: Project skeleton, build, local runtime
 
-- [ ] T001 Create Maven project `pom.xml`:
+- [X] T001 Create Maven project `pom.xml`:
   - Java 21; Spring Boot 3.5.x parent.
   - Starters: web, validation, data-jpa, data-redis, cache, amqp, actuator.
   - Libraries: flyway-core, flyway-mysql, mysql-connector-j.
   - Test dependencies: spring-boot-starter-test, spring-boot-testcontainers, testcontainers mysql, junit-jupiter.
   - Plugins: Surefire runs `*Test`; Failsafe runs `*IT`.
-- [ ] T002 Create application entry point `src/main/java/com/kibo/reservation/KiboReservationApplication.java`
+- [X] T002 Create application entry point `src/main/java/com/kibo/reservation/KiboReservationApplication.java`
   with `@EnableScheduling` and `@EnableAsync`.
-- [ ] T003 [P] Create `src/main/resources/application.yml`:
+- [X] T003 [P] Create `src/main/resources/application.yml`:
   - All infra settings read from env with NO host or credential defaults: `DB_URL`, `DB_USERNAME`,
     `DB_PASSWORD`, `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`, `RABBITMQ_HOST`, `RABBITMQ_PORT`,
     `RABBITMQ_USERNAME`, `RABBITMQ_PASSWORD`.
@@ -46,11 +46,11 @@ Write each story's tests first and make sure they fail before implementing.
     `kibo.seed.enabled=true`.
   - `logging.structured.format.console=ecs`.
   - Actuator exposes `health`, with readiness group `include: db`.
-- [ ] T004 [P] Create `.env.example` (clearly marked local-only placeholder values for every variable in
+- [X] T004 [P] Create `.env.example` (clearly marked local-only placeholder values for every variable in
   T003, plus `MYSQL_ROOT_PASSWORD`) and `.gitignore` (ignore `.env`, `target/`, `.idea/`).
-- [ ] T005 [P] Create multi-stage `Dockerfile` (maven:3.9-eclipse-temurin-21 build → eclipse-temurin:21-jre
+- [X] T005 [P] Create multi-stage `Dockerfile` (maven:3.9-eclipse-temurin-21 build → eclipse-temurin:21-jre
   runtime, non-root user, exposes 8080).
-- [ ] T006 [P] Create `docker-compose.yml`:
+- [X] T006 [P] Create `docker-compose.yml`:
   - Services: `app`, `mysql` (8.4), `redis` (7), `rabbitmq` (management image, ports 5672/15672).
   - Each service has a healthcheck; `app` uses `depends_on: condition: service_healthy`.
   - `env_file: .env`, a named volume for MySQL, and no hardcoded credentials.
@@ -64,7 +64,7 @@ story depends on
 
 **⚠️ CRITICAL**: No user story work begins until this phase is complete
 
-- [ ] T007 Create Flyway migration `src/main/resources/db/migration/V1__create_drops_and_holds.sql`:
+- [X] T007 Create Flyway migration `src/main/resources/db/migration/V1__create_drops_and_holds.sql`:
   - **`drops`**:
     - `id BIGINT AUTO_INCREMENT PK`
     - `name VARCHAR(200) NOT NULL`
@@ -91,41 +91,43 @@ story depends on
     - `UNIQUE uk_holds_customer_request (customer_id, request_key)`
     - `INDEX ix_holds_status_expires (status, expires_at)`
     - `INDEX ix_holds_drop (drop_id)`
-- [ ] T008 [P] Create `HoldStatus` enum with an explicit transition table (ACTIVE → {CONFIRMED, CANCELLED,
+- [X] T008 [P] Create `HoldStatus` enum with an explicit transition table (ACTIVE → {CONFIRMED, CANCELLED,
   EXPIRED}; final states have none) and `canTransitionTo(target)`/`isFinal()` in
   `src/main/java/com/kibo/reservation/domain/HoldStatus.java`.
-- [ ] T009 [P] Create `DropAvailabilityStatus` enum with
+- [X] T009 [P] Create `DropAvailabilityStatus` enum with
   `static of(startsAt, availableQuantity, now)` → UPCOMING if `now < startsAt`, else SOLD_OUT if
   `available == 0`, else OPEN, in `src/main/java/com/kibo/reservation/domain/DropAvailabilityStatus.java`.
-- [ ] T010 [P] Create the JPA entity `Drop` (fields per data-model.md; no setters for quantities) in
+- [X] T010 [P] Create the JPA entity `Drop` (fields per data-model.md; no setters for quantities) in
   `src/main/java/com/kibo/reservation/domain/Drop.java`.
-- [ ] T011 [P] Create the JPA entity `Hold` (UUID id; `effectiveStatus(now)` returns EXPIRED when
+- [X] T011 [P] Create the JPA entity `Hold` (UUID id; `effectiveStatus(now)` returns EXPIRED when
   `status == ACTIVE && !now.isBefore(expiresAt)`) in `src/main/java/com/kibo/reservation/domain/Hold.java`.
-- [ ] T012 [P] Create domain exceptions, each carrying an `ErrorCode`, in
+- [X] T012 [P] Create domain exceptions, each carrying an `ErrorCode`, in
   `src/main/java/com/kibo/reservation/domain/exception/`: `DomainException` (base),
   `DropNotFoundException`, `HoldNotFoundException`, `DropNotReleasedException`,
   `InsufficientInventoryException` (with availableQuantity), `HoldExpiredException`,
   `InvalidStateTransitionException` (with currentStatus), `IdempotencyKeyConflictException`,
   `InventoryInvariantViolationException`.
-- [ ] T013 [P] Create the `ErrorCode` enum (VALIDATION_ERROR, DROP_NOT_FOUND, HOLD_NOT_FOUND,
+  - _Status: done. `InventoryInvariantViolationException` deliberately extends `RuntimeException` (not `DomainException`) so it is answered as a generic 500 and its message is never returned._
+- [X] T013 [P] Create the `ErrorCode` enum (VALIDATION_ERROR, DROP_NOT_FOUND, HOLD_NOT_FOUND,
   DROP_NOT_RELEASED, INSUFFICIENT_INVENTORY, HOLD_EXPIRED, INVALID_STATE_TRANSITION,
   IDEMPOTENCY_KEY_CONFLICT, SERVICE_UNAVAILABLE, INTERNAL_ERROR), each with an HTTP status, in
   `src/main/java/com/kibo/reservation/exception/ErrorCode.java`.
-- [ ] T014 Create `GlobalExceptionHandler` (`@RestControllerAdvice`) in
+- [X] T014 Create `GlobalExceptionHandler` (`@RestControllerAdvice`) in
   `src/main/java/com/kibo/reservation/exception/GlobalExceptionHandler.java`:
   - Returns RFC 7807 `ProblemDetail` with `code` and `timestamp`, plus `currentStatus`,
     `availableQuantity` and `errors[]` where relevant.
   - Maps bean-validation, missing-header and type-mismatch errors to 400.
   - Maps DB connectivity and exhausted lock retries to 503.
   - Maps anything else to 500 with no stack trace.
-- [ ] T015 [P] Create `DropRepository` in `src/main/java/com/kibo/reservation/repository/DropRepository.java`.
+- [X] T015 [P] Create `DropRepository` in `src/main/java/com/kibo/reservation/repository/DropRepository.java`.
   Both methods are `@Modifying(clearAutomatically = true, flushAutomatically = true)` and return the
   affected-row count:
   - `reserveUnits(id, qty, now)`:
     `UPDATE Drop d SET d.availableQuantity = d.availableQuantity - :qty, d.updatedAt = :now WHERE d.id = :id AND d.availableQuantity >= :qty AND d.startsAt <= :now`.
   - `releaseUnits(id, qty, now)`:
     `... + :qty ... WHERE d.id = :id AND d.availableQuantity + :qty <= d.totalQuantity`.
-- [ ] T016 [P] Create `HoldRepository` in `src/main/java/com/kibo/reservation/repository/HoldRepository.java`:
+  - _Status: done (`reserveUnits` and `releaseUnits`)._
+- [X] T016 [P] Create `HoldRepository` in `src/main/java/com/kibo/reservation/repository/HoldRepository.java`:
   - `findByCustomerIdAndRequestKey`.
   - `findOverdueActiveIds(now, Pageable)`: `status = ACTIVE AND expiresAt <= :now ORDER BY expiresAt`.
   - Guarded `@Modifying` transitions, each returning the affected-row count:
@@ -133,16 +135,19 @@ story depends on
       `WHERE status = 'ACTIVE' AND expiresAt > :now`.
     - `expire(id, now)`: `WHERE status = 'ACTIVE' AND expiresAt <= :now`.
     - All three set `resolvedAt` and `updatedAt`.
+  - _Status: done (`findByCustomerIdAndRequestKey`, guarded `confirm`/`cancel`/`expire`, `findOverdueActiveIds`)._
 - [ ] T017 Create `HoldTransitions` (`@Transactional`) in
   `src/main/java/com/kibo/reservation/application/HoldTransitions.java`:
   - `expireAndRelease(holdId, now)`: guarded expire; release units only if 1 row changed; throw
     `InventoryInvariantViolationException` if the release affects 0 rows.
   - `cancelAndRelease(holdId, customerId, now)`: same rule.
   - Each publishes a `HoldLifecycleEvent` only on the 1-row path. Shared by US2, US3 and US4.
-- [ ] T018 [P] Create the `HoldLifecycleEvent` record (eventId, type HOLD_CREATED|CONFIRMED|CANCELLED|EXPIRED,
+  - _Status: PARTIAL: no `HoldTransitions` class. Cancel stays in `HoldService`, expire is in `HoldExpirationService`, and both return units through the shared `UnitRelease` (same rule: release only on the 1-row path, throw `InventoryInvariantViolationException` otherwise). Lifecycle events are not published yet (messaging phase)._
+- [X] T018 [P] Create the `HoldLifecycleEvent` record (eventId, type HOLD_CREATED|CONFIRMED|CANCELLED|EXPIRED,
   occurredAt, holdId, dropId, customerId, quantity, status, expiresAt) in
   `src/main/java/com/kibo/reservation/domain/event/HoldLifecycleEvent.java`.
-- [ ] T019 [P] Create config classes in `src/main/java/com/kibo/reservation/config/`:
+  - _Status: done at `domain/event/HoldLifecycleEvent.java` (+ `Type.changesAvailability()`). Raised in-process inside the transaction on every real change (created, confirmed, cancelled, expired) and never for replays, repeats or rejections. Today only the cache listener consumes it; the RabbitMQ publisher (Phase 9) will listen to the same event._
+- [X] T019 [P] Create config classes in `src/main/java/com/kibo/reservation/config/`:
   - `ClockConfig.java`: UTC `Clock` bean.
   - `KiboProperties.java`: `@ConfigurationProperties` for hold duration, default max-per-hold,
     expiration interval and batch size, cache TTL, seed enabled.
@@ -151,14 +156,14 @@ story depends on
     jittered backoff.
   - Invoked outside the transactional proxy.
   - Throws `ServiceUnavailableException` when attempts are exhausted.
-- [ ] T021 [P] Create `DataSeeder` (`ApplicationRunner`) in `src/main/java/com/kibo/reservation/config/DataSeeder.java`:
+- [X] T021 [P] Create `DataSeeder` (`ApplicationRunner`) in `src/main/java/com/kibo/reservation/config/DataSeeder.java`:
   - Only if the drops table is empty AND `kibo.seed.enabled`.
   - Inserts 4 drops relative to now: open 50 units, open 5 units, open 1 unit ("last unit"), upcoming
     (+10 min) 20 units.
-- [ ] T022 [P] Create request-header validation helpers in
+- [X] T022 [P] Create request-header validation helpers in
   `src/main/java/com/kibo/reservation/api/HeaderValidation.java`: `X-Customer-Id` and `Idempotency-Key`
   must be 1–64 chars matching `^[A-Za-z0-9._:-]+$`, otherwise VALIDATION_ERROR.
-- [ ] T023 [P] Unit test the transition table, every (from, to) pair, in
+- [X] T023 [P] Unit test the transition table, every (from, to) pair, in
   `src/test/java/com/kibo/reservation/domain/HoldStatusTest.java`. Also unit test
   `DropAvailabilityStatus.of` and `Hold.effectiveStatus` boundaries (exactly at `startsAt` and at
   `expiresAt`) in `src/test/java/com/kibo/reservation/domain/DomainStatusTest.java`.
@@ -167,7 +172,7 @@ story depends on
   - release happens only when the guarded update returns 1;
   - a 0-row update releases nothing and publishes nothing;
   - a 0-row release throws the invariant exception.
-- [ ] T025 Create the Testcontainers base class `AbstractMySqlIT` in
+- [X] T025 Create the Testcontainers base class `AbstractMySqlIT` in
   `src/test/java/com/kibo/reservation/it/AbstractMySqlIT.java`:
   - MySQL 8.4 container, `@ServiceConnection`, seeding disabled.
   - Redis and RabbitMQ auto-configuration pointed at unused ports or disabled.
@@ -190,7 +195,7 @@ available is 0, and the invariant holds (SC-001). Retries with the same key crea
 
 ### Tests for User Story 1 (write first, must fail)
 
-- [ ] T027 [P] [US1] Unit test hold placement in `src/test/java/com/kibo/reservation/application/HoldServiceCreateTest.java`
+- [X] T027 [P] [US1] Unit test hold placement in `src/test/java/com/kibo/reservation/application/HoldServiceCreateTest.java`
   (Mockito, fixed Clock). Cases:
   - success (status ACTIVE, `expiresAt = now + duration`);
   - quantity 0, or above `maxPerHold` → VALIDATION_ERROR;
@@ -199,30 +204,30 @@ available is 0, and the invariant holds (SC-001). Retries with the same key crea
   - same key with a different drop or quantity → IDEMPOTENCY_KEY_CONFLICT;
   - 0-row decrement that finds the key on re-check → replay;
   - unique-key violation on insert → replay of the existing hold.
-- [ ] T028 [P] [US1] `@WebMvcTest` for `POST /api/v1/drops/{dropId}/holds` in
+- [X] T028 [P] [US1] `@WebMvcTest` for `POST /api/v1/drops/{dropId}/holds` in
   `src/test/java/com/kibo/reservation/api/HoldControllerCreateTest.java`:
   - 201 with `Location`; 200 on replay;
   - 400 when `X-Customer-Id` or `Idempotency-Key` is missing or invalid, or the body is invalid;
   - 404 DROP_NOT_FOUND;
   - 409 for INSUFFICIENT_INVENTORY, DROP_NOT_RELEASED and IDEMPOTENCY_KEY_CONFLICT;
   - response body matches the `HoldResponse` schema in contracts/openapi.yaml.
-- [ ] T029 [P] [US1] `ConcurrentReservationIT` in `src/test/java/com/kibo/reservation/it/ConcurrentReservationIT.java`:
+- [X] T029 [P] [US1] `ConcurrentReservationIT` in `src/test/java/com/kibo/reservation/it/ConcurrentReservationIT.java`:
   - 200 threads behind a `CountDownLatch` start gate; drop of 50 units.
   - Asserts 50 successes, 150 INSUFFICIENT_INVENTORY, available 0, and the invariant.
   - Repeats `-Dkibo.it.runs` times (default 20).
   - Mixed-quantity case: 5 units left, requests for 3, 3 and 2. Each is fully granted or fully rejected,
     and no more than 5 units are granted in total.
-- [ ] T030 [P] [US1] `IdempotentHoldIT` in `src/test/java/com/kibo/reservation/it/IdempotentHoldIT.java`:
+- [X] T030 [P] [US1] `IdempotentHoldIT` in `src/test/java/com/kibo/reservation/it/IdempotentHoldIT.java`:
   10 concurrent requests with the same customer and key give exactly 1 hold row and one decrement (SC-003).
 
 ### Implementation for User Story 1
 
-- [ ] T031 [P] [US1] Create the `CreateHoldRequest` record (`@NotNull @Min(1) Integer quantity`) and the
+- [X] T031 [P] [US1] Create the `CreateHoldRequest` record (`@NotNull @Min(1) Integer quantity`) and the
   `HoldResponse` record (id, dropId, quantity, status, createdAt, expiresAt, resolvedAt) in
   `src/main/java/com/kibo/reservation/api/dto/`.
-- [ ] T032 [P] [US1] Create `HoldMapper` in `src/main/java/com/kibo/reservation/api/dto/HoldMapper.java`.
+- [X] T032 [P] [US1] Create `HoldMapper` in `src/main/java/com/kibo/reservation/api/dto/HoldMapper.java`.
   It maps Hold → HoldResponse using `effectiveStatus(now)` (FR-019) and never exposes the entity.
-- [ ] T033 [US1] Implement `HoldCreation` (`@Transactional`) in
+- [X] T033 [US1] Implement `HoldCreation` (`@Transactional`) in
   `src/main/java/com/kibo/reservation/application/HoldCreation.java`, as research.md §2 orders it:
   1. Key lookup.
   2. `reserveUnits`.
@@ -230,17 +235,17 @@ available is 0, and the invariant holds (SC-001). Retries with the same key crea
   4. On 0 rows: re-check the key, then classify as DROP_NOT_FOUND, DROP_NOT_RELEASED or
      INSUFFICIENT_INVENTORY.
   Validate quantity against `drop.maxPerHold`.
-- [ ] T034 [US1] Implement `HoldService.placeHold(dropId, customerId, requestKey, quantity)` in
+- [X] T034 [US1] Implement `HoldService.placeHold(dropId, customerId, requestKey, quantity)` in
   `src/main/java/com/kibo/reservation/application/HoldService.java`. It is non-transactional:
   - wraps `HoldCreation` in `TransactionRetry`;
   - on `DataIntegrityViolationException` for `uk_holds_customer_request`, reads and returns the existing
     hold (replay), or IDEMPOTENCY_KEY_CONFLICT if the details differ;
   - returns a result flag saying whether the hold was created or replayed.
-- [ ] T035 [US1] Implement `POST /api/v1/drops/{dropId}/holds` in
+- [X] T035 [US1] Implement `POST /api/v1/drops/{dropId}/holds` in
   `src/main/java/com/kibo/reservation/api/HoldController.java`:
   - validates headers with `HeaderValidation`;
   - returns 201 + `Location: /api/v1/holds/{id}` when created, 200 when replayed.
-- [ ] T036 [US1] Add structured logging (holdId, dropId, customerId, quantity, outcome/code) for every
+- [X] T036 [US1] Add structured logging (holdId, dropId, customerId, quantity, outcome/code) for every
   hold placement and rejection in `src/main/java/com/kibo/reservation/application/HoldService.java` (FR-031).
 
 **Checkpoint**: US1 works alone. T029 and T030 are green, and holds can be placed through curl.
@@ -257,33 +262,37 @@ invalid confirm is rejected.
 
 ### Tests for User Story 2
 
-- [ ] T037 [P] [US2] Unit test confirm in `src/test/java/com/kibo/reservation/application/HoldServiceConfirmTest.java`:
+- [X] T037 [P] [US2] Unit test confirm in `src/test/java/com/kibo/reservation/application/HoldServiceConfirmTest.java`:
   - ACTIVE → CONFIRMED;
   - repeat on CONFIRMED → idempotent success with no update;
   - overdue ACTIVE → HOLD_EXPIRED and `expireAndRelease` invoked;
   - EXPIRED → HOLD_EXPIRED; CANCELLED → INVALID_STATE_TRANSITION (with currentStatus);
   - wrong customer or unknown id → HOLD_NOT_FOUND.
-- [ ] T038 [P] [US2] `@WebMvcTest` for `POST /api/v1/holds/{holdId}/confirm` in
+  - _Status: done in `HoldServiceTransitionTest` (confirm and cancel unit tests share one class). The overdue case asserts HOLD_EXPIRED; settling to EXPIRED via `expireAndRelease` is deferred to US3._
+- [X] T038 [P] [US2] `@WebMvcTest` for `POST /api/v1/holds/{holdId}/confirm` in
   `src/test/java/com/kibo/reservation/api/HoldControllerConfirmTest.java`: 200, 404 (including a malformed
   UUID), 409 HOLD_EXPIRED and 409 INVALID_STATE_TRANSITION with `currentStatus`.
-- [ ] T039 [P] [US2] `ConfirmIT` in `src/test/java/com/kibo/reservation/it/ConfirmIT.java`:
+- [X] T039 [P] [US2] `ConfirmIT` in `src/test/java/com/kibo/reservation/it/ConfirmIT.java`:
   - confirm keeps units consumed and the invariant holds;
   - confirm at exactly `expiresAt` is rejected (Clock fixed at the boundary).
+  - _Status: done in `ConfirmCancelIT` (the boundary is asserted against the repository guard with explicit timestamps)._
 
 ### Implementation for User Story 2
 
-- [ ] T040 [US2] Implement `HoldConfirmation` (`@Transactional`) in
+- [X] T040 [US2] Implement `HoldConfirmation` (`@Transactional`) in
   `src/main/java/com/kibo/reservation/application/HoldConfirmation.java`:
   - guarded `confirm`; on 1 row, publish HOLD_CONFIRMED;
   - on 0 rows, load and classify: HOLD_NOT_FOUND for a missing hold or wrong customer; idempotent for
     CONFIRMED; HOLD_EXPIRED for EXPIRED or overdue; INVALID_STATE_TRANSITION otherwise.
-- [ ] T041 [US2] Implement `HoldService.confirm(holdId, customerId)` in
+  - _Status: done inside `HoldService.transitionInTransaction` (no separate `HoldConfirmation` class: one explicit transaction for both confirm and cancel)._
+- [X] T041 [US2] Implement `HoldService.confirm(holdId, customerId)` in
   `src/main/java/com/kibo/reservation/application/HoldService.java`:
   - uses `TransactionRetry`;
   - on an overdue hold, calls `HoldTransitions.expireAndRelease` in its own transaction before throwing
     HOLD_EXPIRED;
   - logs the outcome (FR-031).
-- [ ] T042 [US2] Add `POST /api/v1/holds/{holdId}/confirm` to
+  - _Status: done: an overdue hold is rejected with HOLD_EXPIRED and settled on contact via `HoldExpirationService.expireOne` in its own transaction (best effort). `TransactionRetry` (T020) is still deferred._
+- [X] T042 [US2] Add `POST /api/v1/holds/{holdId}/confirm` to
   `src/main/java/com/kibo/reservation/api/HoldController.java` (a malformed UUID gives 404 HOLD_NOT_FOUND).
 
 **Checkpoint**: US1 and US2 both work independently.
@@ -299,33 +308,38 @@ restored once, and confirming it is rejected. Concurrent or repeated sweeps neve
 
 ### Tests for User Story 3
 
-- [ ] T043 [P] [US3] Unit test `HoldExpirationService` in
+- [X] T043 [P] [US3] Unit test `HoldExpirationService` in
   `src/test/java/com/kibo/reservation/application/HoldExpirationServiceTest.java`:
   - batches until a short page is returned;
   - per-hold failure is logged and the batch continues;
   - a 0-row expire is a no-op.
-- [ ] T044 [P] [US3] `ExpirationIT` in `src/test/java/com/kibo/reservation/it/ExpirationIT.java`:
+  - _Status: done in `HoldExpirationServiceTest` (+ `HoldExpirationJobTest`)._
+- [X] T044 [P] [US3] `ExpirationIT` in `src/test/java/com/kibo/reservation/it/ExpirationIT.java`:
   - overdue holds become EXPIRED and units are restored;
   - 3 concurrent sweeper threads plus repeated sweeps release each hold exactly once (invariant);
   - a hold overdue at "restart" is expired on the first sweep;
   - confirm after expiry → HOLD_EXPIRED.
-- [ ] T045 [US3] Create `HoldRaceIT` in `src/test/java/com/kibo/reservation/it/HoldRaceIT.java` with
+  - _Status: done in `ExpirationIT` (+ `HoldExpirationJobIT` proving the real `@Scheduled` job)._
+- [X] T045 [US3] Create `HoldRaceIT` in `src/test/java/com/kibo/reservation/it/HoldRaceIT.java` with
   **confirm vs expire**, run `-Dkibo.it.raceRuns` times (default 200):
   - the two operations use clocks either side of `expiresAt`;
   - asserts exactly one final state and `available == total − confirmed` (SC-002).
+  - _Status: done in `HoldRaceIT`; property is `kibo.it.raceRuns` (default 200). Also covers confirm + cancel + expire all at once._
 
 ### Implementation for User Story 3
 
-- [ ] T046 [US3] Implement `HoldExpirationService.expireOverdue(now)` in
+- [X] T046 [US3] Implement `HoldExpirationService.expireOverdue(now)` in
   `src/main/java/com/kibo/reservation/application/HoldExpirationService.java`:
   - pages `findOverdueActiveIds` by `kibo.expiration.batch-size`;
   - calls `HoldTransitions.expireAndRelease` per id (own transaction, via `TransactionRetry`);
   - loops while a page is full.
-- [ ] T047 [US3] Implement `HoldExpirationJob` in
+  - _Status: done as `expireOverdue(now)` + `expireOne(id, now)`; the per-hold transaction lives in `HoldExpirationService` itself (no `HoldTransitions`). No `TransactionRetry`: a failed hold is retried by the next sweep._
+- [X] T047 [US3] Implement `HoldExpirationJob` in
   `src/main/java/com/kibo/reservation/application/HoldExpirationJob.java`:
   - `@Scheduled(fixedDelayString = "${kibo.expiration.interval}")` calling `expireOverdue(clock.instant())`;
   - logs a summary (expired count, duration) and each expiry (FR-031);
   - no JVM locks or ShedLock.
+  - _Status: done; first run is one interval after startup (`initialDelay`), so tests with `PT1H` never see a background sweep._
 
 **Checkpoint**: Expiry runs on its own. The confirm-vs-expire race is proven.
 
@@ -341,29 +355,33 @@ cancel vs confirm races each produce exactly one final state.
 
 ### Tests for User Story 4
 
-- [ ] T048 [P] [US4] Unit test cancel in `src/test/java/com/kibo/reservation/application/HoldServiceCancelTest.java`:
+- [X] T048 [P] [US4] Unit test cancel in `src/test/java/com/kibo/reservation/application/HoldServiceCancelTest.java`:
   - ACTIVE → CANCELLED with release;
   - repeat on CANCELLED → idempotent with no release;
   - CONFIRMED → INVALID_STATE_TRANSITION;
   - EXPIRED or overdue → HOLD_EXPIRED and settle;
   - wrong customer → HOLD_NOT_FOUND.
-- [ ] T049 [P] [US4] `@WebMvcTest` for `POST /api/v1/holds/{holdId}/cancel` in
+  - _Status: done in `HoldServiceTransitionTest`._
+- [X] T049 [P] [US4] `@WebMvcTest` for `POST /api/v1/holds/{holdId}/cancel` in
   `src/test/java/com/kibo/reservation/api/HoldControllerCancelTest.java`: 200, 404, and 409 with
   `currentStatus`.
-- [ ] T050 [US4] Extend `src/test/java/com/kibo/reservation/it/HoldRaceIT.java` with the
+  - _Status: done in `HoldControllerTransitionTest`._
+- [X] T050 [US4] Extend `src/test/java/com/kibo/reservation/it/HoldRaceIT.java` with the
   **cancel vs expire** and **cancel vs confirm** races (×raceRuns): exactly one final state, the
   invariant holds, and no double release.
+  - _Status: done in `ConfirmCancelRaceIT` (cancel vs confirm) and `HoldRaceIT` (cancel vs expire)._
 
 ### Implementation for User Story 4
 
-- [ ] T051 [US4] Implement `HoldService.cancel(holdId, customerId)` in
+- [X] T051 [US4] Implement `HoldService.cancel(holdId, customerId)` in
   `src/main/java/com/kibo/reservation/application/HoldService.java`:
   - calls `HoldTransitions.cancelAndRelease` via `TransactionRetry`;
   - on 0 rows, classifies: idempotent for CANCELLED; INVALID_STATE_TRANSITION for CONFIRMED;
     HOLD_EXPIRED for EXPIRED or overdue (settle via `expireAndRelease`); HOLD_NOT_FOUND for a missing hold
     or wrong customer;
   - logs the outcome (FR-031).
-- [ ] T052 [US4] Add `POST /api/v1/holds/{holdId}/cancel` to `src/main/java/com/kibo/reservation/api/HoldController.java`.
+  - _Status: done: same settle-on-contact as T041; `TransactionRetry` still deferred._
+- [X] T052 [US4] Add `POST /api/v1/holds/{holdId}/cancel` to `src/main/java/com/kibo/reservation/api/HoldController.java`.
 
 **Checkpoint**: The full lifecycle works and all race pairs are proven.
 
@@ -401,37 +419,41 @@ With Redis stopped, reads still succeed from MySQL.
 
 ### Tests for User Story 6
 
-- [ ] T057 [P] [US6] Unit test `DropQueryService` in `src/test/java/com/kibo/reservation/application/DropQueryServiceTest.java`:
+- [X] T057 [P] [US6] Unit test `DropQueryService` in `src/test/java/com/kibo/reservation/application/DropQueryServiceTest.java`:
   - snapshot mapping;
   - `availabilityStatus` computed with the current clock after the cache read (an UPCOMING snapshot flips
     to OPEN at `startsAt`);
   - unknown id → DROP_NOT_FOUND.
-- [ ] T058 [P] [US6] `@WebMvcTest` for `GET /api/v1/drops` and `GET /api/v1/drops/{dropId}` in
+- [X] T058 [P] [US6] `@WebMvcTest` for `GET /api/v1/drops` and `GET /api/v1/drops/{dropId}` in
   `src/test/java/com/kibo/reservation/api/DropControllerTest.java`: `DropResponse` schema; 404 DROP_NOT_FOUND.
-- [ ] T059 [P] [US6] Unit test `LoggingCacheErrorHandler` (get, put and evict errors are swallowed and
+- [X] T059 [P] [US6] Unit test `LoggingCacheErrorHandler` (get, put and evict errors are swallowed and
   logged) and `DropCacheEvictionListener` (evicts on CREATED, CANCELLED and EXPIRED, not on CONFIRMED) in
   `src/test/java/com/kibo/reservation/cache/DropCacheTest.java`.
+  - _Status: done as `cache/DropCacheTest`, `cache/DropCacheEvictionListenerTest` and `cache/CacheIsNotUsedForDecisionsTest`. There is no `LoggingCacheErrorHandler`: `DropCache` itself catches, logs and bypasses (see T063)._
 
 ### Implementation for User Story 6
 
-- [ ] T060 [P] [US6] Create the `DropResponse` record and the `DropSnapshot` cache record in
+- [X] T060 [P] [US6] Create the `DropResponse` record and the `DropSnapshot` cache record in
   `src/main/java/com/kibo/reservation/api/dto/DropResponse.java` and
   `src/main/java/com/kibo/reservation/application/DropSnapshot.java`.
-- [ ] T061 [US6] Implement `DropQueryService` in `src/main/java/com/kibo/reservation/application/DropQueryService.java`:
+- [X] T061 [US6] Implement `DropQueryService` in `src/main/java/com/kibo/reservation/application/DropQueryService.java`:
   - `listDrops()` uses `@Cacheable("drops:all")`; `getDrop(id)` uses `@Cacheable("drops")`;
   - read-only transactions; returns snapshots;
   - computes `DropAvailabilityStatus` outside the cache.
-- [ ] T062 [US6] Implement `GET /api/v1/drops` and `GET /api/v1/drops/{dropId}` in
+  - _Status: done as explicit cache-aside in `DropQueryService` (not `@Cacheable`): the database transaction opens only on a miss, never around Redis calls, and unknown drops are never cached. `availabilityStatus` is still computed outside the cache._
+- [X] T062 [US6] Implement `GET /api/v1/drops` and `GET /api/v1/drops/{dropId}` in
   `src/main/java/com/kibo/reservation/api/DropController.java`.
-- [ ] T063 [US6] Implement `RedisCacheConfig` in `src/main/java/com/kibo/reservation/cache/RedisCacheConfig.java`:
+- [X] T063 [US6] Implement `RedisCacheConfig` in `src/main/java/com/kibo/reservation/cache/RedisCacheConfig.java`:
   - `RedisCacheManager` with JSON serialization and TTL `kibo.cache.drop-ttl` (3s);
   - Lettuce connect timeout ~500ms and command timeout ~200ms;
   - registers `LoggingCacheErrorHandler` (implemented in
     `src/main/java/com/kibo/reservation/cache/LoggingCacheErrorHandler.java`).
-- [ ] T064 [US6] Implement `DropCacheEvictionListener` in
+  - _Status: done differently: no `RedisCacheManager`/`RedisCacheConfig`. `cache/DropCache` uses `StringRedisTemplate` with typed Jackson JSON (no class names stored), TTL `kibo.cache.drop-ttl`, and fails open with a bypass window of `max(5 s, TTL)`. Timeouts (connect 500 ms, command 200 ms) are set in `application.yml`. Rationale: `docs/caching-redis.md`._
+- [X] T064 [US6] Implement `DropCacheEvictionListener` in
   `src/main/java/com/kibo/reservation/cache/DropCacheEvictionListener.java`.
   It uses `@TransactionalEventListener(phase = AFTER_COMMIT)` on `HoldLifecycleEvent` and evicts
   `drops::{dropId}` and `drops:all` for CREATED, CANCELLED and EXPIRED.
+  - _Status: done in `cache/DropCacheEvictionListener` (AFTER_COMMIT on `HoldLifecycleEvent`; evicts `kibo:drops:<id>` and `kibo:drops:all` for created, cancelled and expired; not for confirmed)._
 
 **Checkpoint**: All six stories work. Reads are cached and the cache is bypassed safely on failure.
 
@@ -441,23 +463,23 @@ With Redis stopped, reads still succeed from MySQL.
 
 **Purpose**: Publish HOLD_* events after commit via an isolated adapter (plan, research.md §8, contracts/events.md)
 
-- [ ] T065 [P] Unit test `RabbitHoldEventPublisher` in
+- [X] T065 [P] Unit test `RabbitHoldEventPublisher` in
   `src/test/java/com/kibo/reservation/messaging/RabbitHoldEventPublisherTest.java` with a mocked
   `RabbitTemplate`:
   - correct exchange, routing key and JSON payload;
   - a broker exception is swallowed and logged at WARN with the payload.
-- [ ] T066 [P] Create `RabbitMessagingConfig` in `src/main/java/com/kibo/reservation/messaging/RabbitMessagingConfig.java`:
+- [X] T066 [P] Create `RabbitMessagingConfig` in `src/main/java/com/kibo/reservation/messaging/RabbitMessagingConfig.java`:
   - topic exchange `kibo.holds` and durable queue `kibo.holds.audit` bound with `hold.#` (names from
     `kibo.messaging.*`);
   - Jackson message converter; publisher confirms on.
-- [ ] T067 [P] Create the `HoldEventMessage` record per contracts/events.md in
+- [X] T067 [P] Create the `HoldEventMessage` record per contracts/events.md in
   `src/main/java/com/kibo/reservation/messaging/HoldEventMessage.java`.
-- [ ] T068 Implement `RabbitHoldEventPublisher` in
+- [X] T068 Implement `RabbitHoldEventPublisher` in
   `src/main/java/com/kibo/reservation/messaging/RabbitHoldEventPublisher.java`:
   - `@TransactionalEventListener(phase = AFTER_COMMIT)` with `@Async("eventPublisherExecutor")`;
   - maps the event to the message; routing key `hold.created|confirmed|cancelled|expired`;
   - catches and logs failures (at-most-once).
-- [ ] T069 Create `AsyncConfig` in `src/main/java/com/kibo/reservation/config/AsyncConfig.java`: bounded
+- [X] T069 Create `AsyncConfig` in `src/main/java/com/kibo/reservation/config/AsyncConfig.java`: bounded
   `eventPublisherExecutor` (core 2, max 4, queue 1000, discard-and-log rejection policy).
 
 ---
@@ -482,9 +504,10 @@ With Redis stopped, reads still succeed from MySQL.
 - [ ] T074 [P] Write `docs/concurrency-and-transactions.md` from research.md §2–§5: the conditional
   updates, guarded transitions, transaction-boundary table, isolation level, retries and the
   duplicate-key race.
-- [ ] T075 [P] Write `docs/caching-redis.md` (cache-aside, TTL, after-commit eviction, staleness bound,
+- [X] T075 [P] Write `docs/caching-redis.md` (cache-aside, TTL, after-commit eviction, staleness bound,
   failure behavior, why Redis isn't authoritative) and `docs/messaging-rabbitmq.md` (topology,
   after-commit at-most-once trade-off, outbox as future work).
+  - _Status: PARTIAL: `docs/caching-redis.md` is written (cache-aside, TTL, after-commit eviction, staleness bound, failure behavior, why Redis is not authoritative). `docs/messaging-rabbitmq.md` remains for Phase 9._
 - [ ] T076 [P] Write `docs/expiration.md` (job design, multi-instance safety, 10s bound, read-time EXPIRED,
   settle-on-contact) and `docs/testing-strategy.md` (unit vs IT split, test-to-SC mapping, how to run full
   repetition counts).

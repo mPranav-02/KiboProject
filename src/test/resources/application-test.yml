@@ -1,0 +1,10 @@
+# Profile for Spring-context tests (activated with @ActiveProfiles("test")).
+# The datasource is supplied by Testcontainers (@ServiceConnection) in integration tests.
+
+kibo:
+  seed:
+    enabled: false        # tests create exactly the data they assert on
+  expiration:
+    interval: PT1H        # keep the background sweep out of the way; tests drive expiry explicitly
+  messaging:
+    enabled: false        # no broker in tests by default; the messaging ITs switch it on

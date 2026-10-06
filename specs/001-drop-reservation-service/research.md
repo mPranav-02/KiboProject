@@ -221,6 +221,16 @@ produced during implementation (Constitution XVII).
   - No TTL: unbounded staleness.
   - Caching the entities: couples the cache to the persistence model.
 
+> **As built (Redis phase).** Behavior is as decided above, with these implementation differences, all
+> explained in [docs/caching-redis.md](../../docs/caching-redis.md):
+> - The two keys are `kibo:drops:all` and `kibo:drops:<id>`, accessed through `StringRedisTemplate` and typed
+>   Jackson JSON in `cache/DropCache`, not through Spring's `@Cacheable`/`RedisCacheManager`. This gives typed
+>   (non-polymorphic) JSON, a read path that never holds a database transaction around Redis calls, and failure
+>   handling in one place instead of a `CacheErrorHandler`.
+> - Eviction listens to the in-process `HoldLifecycleEvent` (AFTER_COMMIT), which also feeds RabbitMQ later.
+> - After any Redis failure the cache is bypassed for `max(5 s, TTL)`, so an outage costs one timeout, not one
+>   per request, and no pre-failure entry can outlive the bypass.
+
 ## §8 RabbitMQ events (commit/publish trade-off)
 
 - **Decision**:
@@ -239,6 +249,15 @@ produced during implementation (Constitution XVII).
   - write `outbox_events` rows in the same transaction;
   - a relay publishes them and marks them sent;
   - gives at-least-once delivery with consumer de-duplication by `eventId`.
+- **As built (RabbitMQ phase)**:
+  - `RabbitHoldEventPublisher` listens to `HoldLifecycleEvent` (AFTER_COMMIT + `@Async("eventPublisherExecutor")`,
+    bounded 2-4 threads / queue 1000, drop-and-log when full) and publishes JSON built from `HoldEventMessage`.
+  - It uses `RabbitTemplate.send` with `CorrelationData` and waits up to 5 s for the publisher confirm on the
+    pool thread. Any failure is logged at WARN with the payload and swallowed (no retry, no outbox).
+  - Topology (`Declarables`): topic exchange + durable audit queue bound `hold.#`; names and an on/off switch under
+    `kibo.messaging.*`; a demo `AuditEventConsumer` logs each event.
+  - Broker connect timeout 1 s. Health probes enabled so readiness (MySQL only) is served at `/actuator/health/readiness`.
+  - Details: docs/messaging-rabbitmq.md.
 - **Alternatives considered**:
   - Synchronous publish in the request: a broker outage would add connect-timeout latency to every request
     (SC-007).

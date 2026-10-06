@@ -1,0 +1,8 @@
+# Local secrets
+.env
+
+# Build output
+target/
+
+# IDE
+.idea/
