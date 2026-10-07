@@ -1,0 +1,1465 @@
+{
+  "info": {
+    "name": "KIBO Limited Drop Reservation",
+    "_postman_id": "6f1a3f0e-2b7c-4d5e-9a10-4b1b0c0d0001",
+    "description": "All endpoints of the KIBO reservation service with assertions.\n\n1. `docker compose up --build`\n2. Import this collection and click **Run** (folders 0-3 run in order; each run uses fresh idempotency keys).\n3. Folder 4 needs `KIBO_HOLD_DURATION=PT20S` in `.env`; otherwise its checks are skipped.\n\nDrop ids match the startup seed on an empty database: 1 = 50 units, 3 = single unit, 4 = opens 10 min after startup.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "0. Health",
+      "item": [
+        {
+          "name": "Readiness",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/actuator/health/readiness",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "actuator",
+                "health",
+                "readiness"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"UP\", () => pm.expect(pm.response.json().status).to.eql(\"UP\"));",
+                  "// A fresh run id per collection run, so idempotency keys never collide with an earlier run.",
+                  "pm.collectionVariables.set(\"runId\", \"run-\" + Date.now());"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Health with components",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/actuator/health",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "actuator",
+                "health"
+              ]
+            },
+            "description": "Shows db, redis and rabbit separately. Readiness depends on the database only."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status 200\", () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "1. Drops",
+      "item": [
+        {
+          "name": "List drops",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/drops",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "drops"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status 200\", () => pm.response.to.have.status(200));",
+                  "const drops = pm.response.json();",
+                  "pm.test(\"seeded drops are listed\", () => pm.expect(drops.length).to.be.at.least(4));",
+                  "pm.test(\"each drop has live availability\", () => drops.forEach(d => pm.expect([\"UPCOMING\",\"OPEN\",\"SOLD_OUT\"]).to.include(d.availabilityStatus)));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get one drop",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/drops/{{openDropId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "drops",
+                "{{openDropId}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status 200\", () => pm.response.to.have.status(200));",
+                  "const d = pm.response.json();",
+                  "pm.test(\"has the drop fields\", () => pm.expect(d).to.include.keys(\"id\",\"name\",\"totalQuantity\",\"availableQuantity\",\"maxPerHold\",\"startsAt\",\"availabilityStatus\"));",
+                  "pm.collectionVariables.set(\"availableBefore\", d.availableQuantity);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get the upcoming drop",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/drops/{{upcomingDropId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "drops",
+                "{{upcomingDropId}}"
+              ]
+            },
+            "description": "Seeded to open 10 minutes after startup; stored so the DROP_NOT_RELEASED check knows whether it still applies."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status 200\", () => pm.response.to.have.status(200));",
+                  "pm.collectionVariables.set(\"upcomingStatus\", pm.response.json().availabilityStatus);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unknown drop → 404",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/drops/999999",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "drops",
+                "999999"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status 404\", () => pm.response.to.have.status(404));",
+                  "pm.test(\"code DROP_NOT_FOUND\", () => pm.expect(pm.response.json().code).to.eql(\"DROP_NOT_FOUND\"));",
+                  "pm.test(\"problem+json body\", () => { pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/problem+json\"); pm.expect(pm.response.json()).to.have.property(\"timestamp\"); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "2. Hold lifecycle (happy path)",
+      "item": [
+        {
+          "name": "Place hold → 201",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Customer-Id",
+                "value": "{{customerId}}"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{runId}}-main"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/drops/{{openDropId}}/holds",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "drops",
+                "{{openDropId}}",
+                "holds"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\"quantity\": 2}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status 201\", () => pm.response.to.have.status(201));",
+                  "const h = pm.response.json();",
+                  "pm.test(\"ACTIVE with an expiry\", () => { pm.expect(h.status).to.eql(\"ACTIVE\"); pm.expect(h.expiresAt).to.be.a(\"string\"); });",
+                  "pm.test(\"Location header points at the hold\", () => pm.expect(pm.response.headers.get(\"Location\")).to.eql(\"/api/v1/holds/\" + h.id));",
+                  "pm.collectionVariables.set(\"holdId\", h.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Same request again (idempotent replay) → 200, same hold",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Customer-Id",
+                "value": "{{customerId}}"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{runId}}-main"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/drops/{{openDropId}}/holds",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "drops",
+                "{{openDropId}}",
+                "holds"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\"quantity\": 2}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"same hold id\", () => pm.expect(pm.response.json().id).to.eql(pm.collectionVariables.get(\"holdId\")));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Availability went down by 2 (once)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/drops/{{openDropId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "drops",
+                "{{openDropId}}"
+              ]
+            },
+            "description": "The drop cache TTL is 3 s but every hold evicts it after commit, so this reads the new value."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"2 units consumed, not 4\", () => pm.expect(pm.response.json().availableQuantity).to.eql(Number(pm.collectionVariables.get(\"availableBefore\")) - 2));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get hold",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Customer-Id",
+                "value": "{{customerId}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/holds/{{holdId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "holds",
+                "{{holdId}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"status is ACTIVE\", () => pm.expect(pm.response.json().status).to.eql(\"ACTIVE\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get hold as another customer → 404",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Customer-Id",
+                "value": "{{otherCustomerId}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/holds/{{holdId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "holds",
+                "{{holdId}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status 404\", () => pm.response.to.have.status(404));",
+                  "pm.test(\"code HOLD_NOT_FOUND\", () => pm.expect(pm.response.json().code).to.eql(\"HOLD_NOT_FOUND\"));",
+                  "pm.test(\"problem+json body\", () => { pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/problem+json\"); pm.expect(pm.response.json()).to.have.property(\"timestamp\"); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Confirm → 200 CONFIRMED",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Customer-Id",
+                "value": "{{customerId}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/holds/{{holdId}}/confirm",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "holds",
+                "{{holdId}}",
+                "confirm"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"status is CONFIRMED\", () => pm.expect(pm.response.json().status).to.eql(\"CONFIRMED\"));",
+                  "pm.test(\"resolvedAt set\", () => pm.expect(pm.response.json().resolvedAt).to.be.a(\"string\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Confirm again (idempotent) → 200",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Customer-Id",
+                "value": "{{customerId}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/holds/{{holdId}}/confirm",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "holds",
+                "{{holdId}}",
+                "confirm"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"status is CONFIRMED\", () => pm.expect(pm.response.json().status).to.eql(\"CONFIRMED\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cancel a confirmed hold → 409",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Customer-Id",
+                "value": "{{customerId}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/holds/{{holdId}}/cancel",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "holds",
+                "{{holdId}}",
+                "cancel"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status 409\", () => pm.response.to.have.status(409));",
+                  "pm.test(\"code INVALID_STATE_TRANSITION\", () => pm.expect(pm.response.json().code).to.eql(\"INVALID_STATE_TRANSITION\"));",
+                  "pm.test(\"currentStatus is CONFIRMED\", () => pm.expect(pm.response.json().currentStatus).to.eql(\"CONFIRMED\"));",
+                  "pm.test(\"problem+json body\", () => { pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/problem+json\"); pm.expect(pm.response.json()).to.have.property(\"timestamp\"); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Place a second hold (to cancel)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Customer-Id",
+                "value": "{{customerId}}"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{runId}}-cancel"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/drops/{{openDropId}}/holds",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "drops",
+                "{{openDropId}}",
+                "holds"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\"quantity\": 1}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status 201\", () => pm.response.to.have.status(201));",
+                  "pm.collectionVariables.set(\"cancelHoldId\", pm.response.json().id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cancel → 200 CANCELLED",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Customer-Id",
+                "value": "{{customerId}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/holds/{{cancelHoldId}}/cancel",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "holds",
+                "{{cancelHoldId}}",
+                "cancel"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"status is CANCELLED\", () => pm.expect(pm.response.json().status).to.eql(\"CANCELLED\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cancel again (idempotent) → 200",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Customer-Id",
+                "value": "{{customerId}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/holds/{{cancelHoldId}}/cancel",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "holds",
+                "{{cancelHoldId}}",
+                "cancel"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"status is CANCELLED\", () => pm.expect(pm.response.json().status).to.eql(\"CANCELLED\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Confirm a cancelled hold → 409",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Customer-Id",
+                "value": "{{customerId}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/holds/{{cancelHoldId}}/confirm",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "holds",
+                "{{cancelHoldId}}",
+                "confirm"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status 409\", () => pm.response.to.have.status(409));",
+                  "pm.test(\"code INVALID_STATE_TRANSITION\", () => pm.expect(pm.response.json().code).to.eql(\"INVALID_STATE_TRANSITION\"));",
+                  "pm.test(\"currentStatus is CANCELLED\", () => pm.expect(pm.response.json().currentStatus).to.eql(\"CANCELLED\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cancelled unit is back (net -2 from the confirmed hold)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/drops/{{openDropId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "drops",
+                "{{openDropId}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"only the confirmed 2 units stay consumed\", () => pm.expect(pm.response.json().availableQuantity).to.eql(Number(pm.collectionVariables.get(\"availableBefore\")) - 2));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "3. Rejections & validation",
+      "item": [
+        {
+          "name": "Same key, different quantity → 409",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Customer-Id",
+                "value": "{{customerId}}"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{runId}}-main"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/drops/{{openDropId}}/holds",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "drops",
+                "{{openDropId}}",
+                "holds"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\"quantity\": 3}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status 409\", () => pm.response.to.have.status(409));",
+                  "pm.test(\"code IDEMPOTENCY_KEY_CONFLICT\", () => pm.expect(pm.response.json().code).to.eql(\"IDEMPOTENCY_KEY_CONFLICT\"));",
+                  "pm.test(\"problem+json body\", () => { pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/problem+json\"); pm.expect(pm.response.json()).to.have.property(\"timestamp\"); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "More than available → 409",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Customer-Id",
+                "value": "{{customerId}}"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{runId}}-toomany"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/drops/{{singleUnitDropId}}/holds",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "drops",
+                "{{singleUnitDropId}}",
+                "holds"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\"quantity\": 2}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "The single-unit drop has 1 unit in total, so 2 can never be granted."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status 409\", () => pm.response.to.have.status(409));",
+                  "pm.test(\"code INSUFFICIENT_INVENTORY\", () => pm.expect(pm.response.json().code).to.eql(\"INSUFFICIENT_INVENTORY\"));",
+                  "pm.test(\"reports what is available\", () => pm.expect(pm.response.json()).to.have.property(\"availableQuantity\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Upcoming drop → 409 DROP_NOT_RELEASED",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Customer-Id",
+                "value": "{{customerId}}"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{runId}}-early"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/drops/{{upcomingDropId}}/holds",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "drops",
+                "{{upcomingDropId}}",
+                "holds"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\"quantity\": 1}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.collectionVariables.get(\"upcomingStatus\") !== \"UPCOMING\") {",
+                  "  pm.test.skip(\"drop already opened (more than 10 min after startup); restart with `docker compose down -v && docker compose up` to see this\", () => {});",
+                  "} else {",
+                  "  pm.test(\"status 409\", () => pm.response.to.have.status(409));",
+                  "  pm.test(\"code DROP_NOT_RELEASED\", () => pm.expect(pm.response.json().code).to.eql(\"DROP_NOT_RELEASED\"));",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Quantity 0 → 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Customer-Id",
+                "value": "{{customerId}}"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{runId}}-zero"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/drops/{{openDropId}}/holds",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "drops",
+                "{{openDropId}}",
+                "holds"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\"quantity\": 0}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status 400\", () => pm.response.to.have.status(400));",
+                  "pm.test(\"code VALIDATION_ERROR\", () => pm.expect(pm.response.json().code).to.eql(\"VALIDATION_ERROR\"));",
+                  "pm.test(\"field errors listed\", () => pm.expect(pm.response.json().errors[0].field).to.eql(\"quantity\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Quantity above maxPerHold → 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Customer-Id",
+                "value": "{{customerId}}"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{runId}}-big"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/drops/{{openDropId}}/holds",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "drops",
+                "{{openDropId}}",
+                "holds"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\"quantity\": 99}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status 400\", () => pm.response.to.have.status(400));",
+                  "pm.test(\"code VALIDATION_ERROR\", () => pm.expect(pm.response.json().code).to.eql(\"VALIDATION_ERROR\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Missing Idempotency-Key → 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Customer-Id",
+                "value": "{{customerId}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/drops/{{openDropId}}/holds",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "drops",
+                "{{openDropId}}",
+                "holds"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\"quantity\": 1}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status 400\", () => pm.response.to.have.status(400));",
+                  "pm.test(\"code VALIDATION_ERROR\", () => pm.expect(pm.response.json().code).to.eql(\"VALIDATION_ERROR\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Missing X-Customer-Id → 400",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/holds/{{holdId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "holds",
+                "{{holdId}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status 400\", () => pm.response.to.have.status(400));",
+                  "pm.test(\"code VALIDATION_ERROR\", () => pm.expect(pm.response.json().code).to.eql(\"VALIDATION_ERROR\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Malformed hold id → 404",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Customer-Id",
+                "value": "{{customerId}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/holds/not-a-uuid",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "holds",
+                "not-a-uuid"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status 404\", () => pm.response.to.have.status(404));",
+                  "pm.test(\"code HOLD_NOT_FOUND\", () => pm.expect(pm.response.json().code).to.eql(\"HOLD_NOT_FOUND\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unknown hold → 404",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Customer-Id",
+                "value": "{{customerId}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/holds/00000000-0000-0000-0000-000000000000/confirm",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "holds",
+                "00000000-0000-0000-0000-000000000000",
+                "confirm"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status 404\", () => pm.response.to.have.status(404));",
+                  "pm.test(\"code HOLD_NOT_FOUND\", () => pm.expect(pm.response.json().code).to.eql(\"HOLD_NOT_FOUND\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unknown drop on hold → 404",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Customer-Id",
+                "value": "{{customerId}}"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{runId}}-nodrop"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/drops/999999/holds",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "drops",
+                "999999",
+                "holds"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\"quantity\": 1}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status 404\", () => pm.response.to.have.status(404));",
+                  "pm.test(\"code DROP_NOT_FOUND\", () => pm.expect(pm.response.json().code).to.eql(\"DROP_NOT_FOUND\"));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "4. Expiry (needs short holds)",
+      "description": "Start the stack with KIBO_HOLD_DURATION=PT20S in .env (then `docker compose up -d --wait`). Run this folder on its own or with the rest. It places a fresh hold, waits until it has expired (about 24 s), then checks it is EXPIRED and can't be confirmed. With the default 5-minute holds the checks are skipped.",
+      "item": [
+        {
+          "name": "Place a hold to let expire",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Customer-Id",
+                "value": "{{customerId}}"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{expireKey}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/drops/{{openDropId}}/holds",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "drops",
+                "{{openDropId}}",
+                "holds"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\"quantity\": 1}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// A new key on every send, so this never replays an older hold (e.g. one made before holds were shortened).",
+                  "pm.collectionVariables.set(\"expireKey\", \"expire-\" + Date.now());"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status 201\", () => pm.response.to.have.status(201));",
+                  "const h = pm.response.json();",
+                  "pm.collectionVariables.set(\"expireHoldId\", h.id);",
+                  "const ms = new Date(h.expiresAt) - new Date(h.createdAt);",
+                  "pm.collectionVariables.set(\"expiryWaitMs\", ms <= 60000 ? ms + 4000 : -1);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "After expiry: GET → EXPIRED",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Customer-Id",
+                "value": "{{customerId}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/holds/{{expireHoldId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "holds",
+                "{{expireHoldId}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (Number(pm.collectionVariables.get(\"expiryWaitMs\")) < 0 && pm.execution && pm.execution.skipRequest) { pm.execution.skipRequest(); }",
+                  "const wait = Number(pm.collectionVariables.get(\"expiryWaitMs\"));",
+                  "if (wait > 0) { setTimeout(() => {}, wait); }"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (Number(pm.collectionVariables.get(\"expiryWaitMs\")) < 0) {",
+                  "  pm.test.skip(\"hold duration is over 60 s; set KIBO_HOLD_DURATION=PT20S to run the expiry checks\", () => {});",
+                  "} else {",
+                  "  pm.test(\"status 200\", () => pm.response.to.have.status(200));",
+                  "  pm.test(\"status is EXPIRED\", () => pm.expect(pm.response.json().status).to.eql(\"EXPIRED\"));",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Confirm after expiry → 409 HOLD_EXPIRED",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Customer-Id",
+                "value": "{{customerId}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/holds/{{expireHoldId}}/confirm",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "holds",
+                "{{expireHoldId}}",
+                "confirm"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (Number(pm.collectionVariables.get(\"expiryWaitMs\")) < 0 && pm.execution && pm.execution.skipRequest) { pm.execution.skipRequest(); }"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (Number(pm.collectionVariables.get(\"expiryWaitMs\")) < 0) {",
+                  "  pm.test.skip(\"hold duration is over 60 s\", () => {});",
+                  "} else {",
+                  "  pm.test(\"status 409\", () => pm.response.to.have.status(409));",
+                  "  pm.test(\"code HOLD_EXPIRED\", () => pm.expect(pm.response.json().code).to.eql(\"HOLD_EXPIRED\"));",
+                  "}"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8080"
+    },
+    {
+      "key": "customerId",
+      "value": "alice"
+    },
+    {
+      "key": "otherCustomerId",
+      "value": "bob"
+    },
+    {
+      "key": "openDropId",
+      "value": "1"
+    },
+    {
+      "key": "singleUnitDropId",
+      "value": "3"
+    },
+    {
+      "key": "upcomingDropId",
+      "value": "4"
+    },
+    {
+      "key": "runId",
+      "value": "run-manual"
+    },
+    {
+      "key": "holdId",
+      "value": ""
+    },
+    {
+      "key": "cancelHoldId",
+      "value": ""
+    },
+    {
+      "key": "expireHoldId",
+      "value": ""
+    },
+    {
+      "key": "availableBefore",
+      "value": ""
+    },
+    {
+      "key": "upcomingStatus",
+      "value": ""
+    },
+    {
+      "key": "expiryWaitMs",
+      "value": "-1"
+    },
+    {
+      "key": "expireKey",
+      "value": ""
+    }
+  ]
+}

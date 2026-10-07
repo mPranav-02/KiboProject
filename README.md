@@ -42,6 +42,10 @@ curl -s -X POST localhost:8080/api/v1/holds/<holdId>/confirm -H 'X-Customer-Id: 
 ```
 
 To watch expiry quickly, put `KIBO_HOLD_DURATION=PT20S` in `.env` and restart.
+
+**Postman:** import [postman/KIBO-Reservation.postman_collection.json](postman/KIBO-Reservation.postman_collection.json)
+and click **Run**. It calls every endpoint, covers the happy path and every error code, and asserts each response
+(the expiry folder runs only when holds are 60 s or shorter, e.g. `KIBO_HOLD_DURATION=PT20S`).
 More scenarios (edge cases, failure drills): [quickstart.md](specs/001-drop-reservation-service/quickstart.md).
 
 ### Run the tests
