@@ -9,10 +9,14 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Positive;
 import com.kibo.reservation.domain.exception.HoldNotFoundException;
+import com.kibo.reservation.domain.exception.ErrorCode;
 import java.net.URI;
 import java.time.Clock;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -24,6 +28,8 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 @RequestMapping("/api/v1")
 public class HoldController {
+
+    private static final Logger log = LoggerFactory.getLogger(HoldController.class);
 
     private final HoldService holdService;
     private final Clock clock;
@@ -48,12 +54,23 @@ public class HoldController {
                 : ResponseEntity.ok(body);
     }
 
+    /**
+     * The customer's own hold. An ACTIVE hold past its expiry is reported as EXPIRED. 404 for an unknown,
+     * malformed or someone else's hold, which is also where the {@code Location} of a new hold points.
+     */
+    @GetMapping("/holds/{holdId}")
+    public HoldResponse get(
+            @PathVariable String holdId,
+            @RequestHeader(ApiHeaders.CUSTOMER_ID) @Pattern(regexp = ApiHeaders.ID_PATTERN) String customerId) {
+        return HoldResponse.from(holdService.getHold(parseHoldId(holdId, customerId, "get"), customerId), clock.instant());
+    }
+
     /** 200 with the CONFIRMED hold, also for a repeated confirm. */
     @PostMapping("/holds/{holdId}/confirm")
     public HoldResponse confirm(
             @PathVariable String holdId,
             @RequestHeader(ApiHeaders.CUSTOMER_ID) @Pattern(regexp = ApiHeaders.ID_PATTERN) String customerId) {
-        return HoldResponse.from(holdService.confirm(parseHoldId(holdId), customerId), clock.instant());
+        return HoldResponse.from(holdService.confirm(parseHoldId(holdId, customerId, "confirm"), customerId), clock.instant());
     }
 
     /** 200 with the CANCELLED hold, also for a repeated cancel. */
@@ -61,14 +78,22 @@ public class HoldController {
     public HoldResponse cancel(
             @PathVariable String holdId,
             @RequestHeader(ApiHeaders.CUSTOMER_ID) @Pattern(regexp = ApiHeaders.ID_PATTERN) String customerId) {
-        return HoldResponse.from(holdService.cancel(parseHoldId(holdId), customerId), clock.instant());
+        return HoldResponse.from(holdService.cancel(parseHoldId(holdId, customerId, "cancel"), customerId), clock.instant());
     }
 
     /** A malformed id is the same 404 as an unknown id: no existence oracle (data-model.md). */
-    private static UUID parseHoldId(String holdId) {
+    private static UUID parseHoldId(String holdId, String customerId, String operation) {
         try {
             return UUID.fromString(holdId);
         } catch (IllegalArgumentException malformed) {
+            // Logged with the caller and the reason, not the text (it is arbitrary client input).
+            log.atInfo()
+                    .addKeyValue("customerId", customerId)
+                    .addKeyValue("operation", operation)
+                    .addKeyValue("code", ErrorCode.HOLD_NOT_FOUND.name())
+                    .addKeyValue("reason", "malformed holdId")
+                    .addKeyValue("holdIdLength", holdId.length())
+                    .log("Hold request rejected");
             throw new HoldNotFoundException(holdId);
         }
     }

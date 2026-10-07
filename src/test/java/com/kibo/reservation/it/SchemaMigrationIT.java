@@ -59,6 +59,21 @@ class SchemaMigrationIT extends AbstractMySqlIT {
     }
 
     @Test
+    void flywayAppliedVersion2WithCaseSensitiveKeysAndTheMaxPerHoldDefault() {
+        assertThat(jdbc.queryForObject(
+                "SELECT COUNT(*) FROM flyway_schema_history WHERE version = '2' AND success = 1", Integer.class))
+                .isEqualTo(1);
+        for (String column : new String[] {"customer_id", "request_key"}) {
+            assertThat(jdbc.queryForObject("SELECT collation_name FROM information_schema.columns "
+                    + "WHERE table_schema = DATABASE() AND table_name = 'holds' AND column_name = ?",
+                    String.class, column)).as(column).isEqualTo("utf8mb4_bin");
+        }
+        assertThat(jdbc.queryForObject("SELECT column_default FROM information_schema.columns "
+                + "WHERE table_schema = DATABASE() AND table_name = 'drops' AND column_name = 'max_per_hold'",
+                String.class)).isEqualTo("4");
+    }
+
+    @Test
     void dropAndHoldRoundTripThroughJpa() {
         Instant now = clock.instant();
         Drop drop = Drop.create("Sneaker", "Limited run", 50, 4, now.minusSeconds(60), now);

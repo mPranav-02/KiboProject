@@ -195,6 +195,21 @@ class HoldServiceCreateTest {
     }
 
     @Test
+    void aReplayLookupThatReturnsAnotherCustomersHoldIsRefusedAndRevealsNothing() {
+        givenDrop(openDrop(4));
+        Hold someoneElses = Hold.createActive(DROP_ID, "Alice", "k1", 2, NOW, Duration.ofMinutes(5));
+        when(holds.findByCustomerIdAndRequestKey("alice", "k1")).thenReturn(Optional.of(someoneElses));
+
+        assertThatThrownBy(() -> service.placeHold(command("k1", 2)))
+                .isInstanceOf(IdempotencyKeyConflictException.class)
+                .satisfies(e -> assertThat(e.getMessage()).doesNotContain(someoneElses.getId().toString())
+                        .doesNotContain("Alice"));
+
+        verify(drops, never()).reserveUnits(anyLong(), anyInt(), any());
+        verify(holds, never()).saveAndFlush(any());
+    }
+
+    @Test
     void zeroRowsButTheKeyWasJustCommittedConcurrentlyReplaysInsteadOfReportingSoldOut() {
         givenDrop(openDrop(4));
         Hold concurrent = Hold.createActive(DROP_ID, "alice", "k1", 1, NOW, Duration.ofMinutes(5));

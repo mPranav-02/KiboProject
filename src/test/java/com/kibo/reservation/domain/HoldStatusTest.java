@@ -54,4 +54,23 @@ class HoldStatusTest {
         assertThatThrownBy(() -> ACTIVE.allowedTargets().add(ACTIVE))
                 .isInstanceOf(UnsupportedOperationException.class);
     }
+
+    @Test
+    void sourcesAreDerivedFromTheTransitionTable() {
+        for (HoldStatus target : new HoldStatus[] {CONFIRMED, CANCELLED, EXPIRED}) {
+            assertThat(HoldStatus.sourcesOf(target)).as("sources of %s", target).containsExactly(ACTIVE);
+        }
+        assertThat(HoldStatus.sourcesOf(ACTIVE)).as("nothing moves back to ACTIVE").isEmpty();
+        assertThat(HoldStatus.sourcesOf(null)).isEmpty();
+        assertThatThrownBy(() -> HoldStatus.sourcesOf(CONFIRMED).add(CONFIRMED))
+                .isInstanceOf(UnsupportedOperationException.class);
+    }
+
+    @Test
+    void onlyCancelledAndExpiredReturnUnits() {
+        assertThat(CANCELLED.returnsUnitsOnEntry()).isTrue();
+        assertThat(EXPIRED.returnsUnitsOnEntry()).isTrue();
+        assertThat(CONFIRMED.returnsUnitsOnEntry()).isFalse();
+        assertThat(ACTIVE.returnsUnitsOnEntry()).isFalse();
+    }
 }

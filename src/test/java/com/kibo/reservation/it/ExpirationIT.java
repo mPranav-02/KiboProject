@@ -11,6 +11,7 @@ import com.kibo.reservation.application.HoldService;
 import com.kibo.reservation.application.PlaceHoldCommand;
 import com.kibo.reservation.config.KiboProperties;
 import com.kibo.reservation.domain.Drop;
+import com.kibo.reservation.domain.HoldStatus;
 import com.kibo.reservation.domain.exception.HoldExpiredException;
 import com.kibo.reservation.repository.DropRepository;
 import com.kibo.reservation.repository.HoldRepository;
@@ -291,7 +292,7 @@ class ExpirationIT extends AbstractMySqlIT {
     }
 
     private int expireAt(TransactionTemplate tx, UUID id, Instant now) {
-        return tx.execute(s -> holds.expire(id, now));
+        return tx.execute(s -> holds.moveAtOrAfterExpiry(id, HoldStatus.EXPIRED, HoldStatus.sourcesOf(HoldStatus.EXPIRED), now));
     }
 
     private int available(long dropId) {

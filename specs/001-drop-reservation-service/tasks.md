@@ -395,15 +395,15 @@ customers' holds look not found.
 **Independent Test**: Create holds in each state. GET returns the correct status and timestamps; another
 customer gets 404.
 
-- [ ] T053 [P] [US5] Unit test `HoldService.getHold` in `src/test/java/com/kibo/reservation/application/HoldServiceGetTest.java`:
+- [X] T053 [P] [US5] Unit test `HoldService.getHold` in `src/test/java/com/kibo/reservation/application/HoldServiceGetTest.java`:
   - effective EXPIRED for overdue ACTIVE;
   - wrong customer, unknown id, or malformed id → HOLD_NOT_FOUND.
-- [ ] T054 [P] [US5] `@WebMvcTest` for `GET /api/v1/holds/{holdId}` in
+- [X] T054 [P] [US5] `@WebMvcTest` for `GET /api/v1/holds/{holdId}` in
   `src/test/java/com/kibo/reservation/api/HoldControllerGetTest.java`: 200 body schema, 400 missing
   `X-Customer-Id`, 404.
-- [ ] T055 [US5] Implement `HoldService.getHold(holdId, customerId)` (`@Transactional(readOnly = true)`,
+- [X] T055 [US5] Implement `HoldService.getHold(holdId, customerId)` (`@Transactional(readOnly = true)`,
   read-only, no settling) in `src/main/java/com/kibo/reservation/application/HoldService.java`.
-- [ ] T056 [US5] Add `GET /api/v1/holds/{holdId}` to `src/main/java/com/kibo/reservation/api/HoldController.java`.
+- [X] T056 [US5] Add `GET /api/v1/holds/{holdId}` to `src/main/java/com/kibo/reservation/api/HoldController.java`.
 
 **Checkpoint**: Hold status is visible to its owner.
 
@@ -589,3 +589,29 @@ T029, T045, T050 or the docs on concurrency (Constitution scope rule).
 
 - [P] = different files, no dependencies on incomplete tasks; [USx] = traceability to spec stories.
 - Commit after each task or logical group; stop at each checkpoint to validate the story independently.
+
+---
+
+## Phase 11: Convergence
+
+- [X] T080 CRITICAL: Route every production hold state change through the `HoldStatus` transition table (e.g. check `canTransitionTo(target)` in `HoldService.transitionInTransaction` and `HoldExpirationService.expireInTransaction`, and drive the 0-row loser classification from it); today `canTransitionTo` is referenced only by `HoldStatusTest` and the rules are hard-coded in guarded JPQL and `==` checks per Constitution VI (contradicts)
+- [X] T081 Make idempotency keys and customer references case-sensitive: add `V2__` migration changing `holds.customer_id` and `holds.request_key` to a binary collation (`utf8mb4_bin`), make `HoldService.replayOf` also verify the existing hold's owner, and add an IT proving customers `bob`/`Bob` and keys `k1`/`K1` are independent (today `utf8mb4_0900_ai_ci` makes `Bob`+`k1` replay `bob`'s hold, leaking its id) per FR-009, FR-022a (contradicts)
+- [X] T082 Log every rejected request with code and context (customerId, dropId, quantity where available): API-edge rejections in `GlobalExceptionHandler.handleExceptionInternal` (missing/invalid headers, invalid body, type mismatch), malformed-holdId 404s from `HoldController.parseHoldId`, 503s (currently a bare WARN), the IDEMPOTENCY_KEY_CONFLICT thrown from the duplicate-key catch in `HoldService.placeHold`, and add dropId/quantity to confirm/cancel rejection logs per FR-031 (partial)
+- [X] T083 Make every error response satisfy the `Problem` schema: set `code` for all Spring MVC errors (404 unknown route, 405, 406, 415) in `GlobalExceptionHandler`, and fill `errors[{field,message}]` for bean-validation failures (`MethodArgumentNotValidException`, `HandlerMethodValidationException`); cover both in the T026 test per SC-006, contracts/openapi.yaml `Problem` (partial)
+- [ ] T084 Scope T070 `InfrastructureDownIT` to the uncovered gap: `RabbitOutageIT`/`AbstractMySqlIT` already cover sequential place/confirm/cancel/expire and readiness with Redis and RabbitMQ unreachable, but every concurrency/race IT runs with `kibo.messaging.enabled=false`; run the 200-way placement and a confirm/cancel-vs-expire race with messaging enabled and both brokers on closed ports, asserting the invariant per SC-005, FR-027 (partial)
+- [ ] T085 Reconcile the unrequested `AuditEventConsumer` (enabled by default, drains `kibo.holds.audit` so quickstart §6's "see messages in the queue" shows an empty queue): either default `kibo.messaging.audit-consumer-enabled` to false, or record it in plan.md Complexity Tracking (which says "no consumer in scope") and update quickstart §6 per plan: Complexity Tracking, Constitution XV (unrequested)
+- [ ] T086 Add `docs/` (`HLD.md`, `caching-redis.md`, `messaging-rabbitmq.md`) to version control — it is untracked while research.md §7/§8 link to it — and update the stale T075 status note per Constitution XVII (partial)
+- [ ] T087 Prevent expiry-sweep starvation: `HoldExpirationService.expireOverdue` re-reads page 0 and stops when a whole page fails, so ≥ batch-size persistently failing holds block newer overdue holds forever; page by keyset `(expiresAt, id)` past ids that failed in this sweep, with a unit test per FR-018 (partial)
+- [ ] T088 Align IT repetition defaults with the tasks: `ConfirmCancelRaceIT` should use `kibo.it.raceRuns` (default 200) instead of `kibo.it.runs` (default 10), and `ConcurrentReservationIT` should default `kibo.it.runs` to 20 per T029, T050, SC-001, SC-002 (partial)
+- [X] T089 Add `DEFAULT 4` to `drops.max_per_hold` in the `V2__` migration (V1 declares it without a default) per data-model.md, T007 (partial)
+- [ ] T090 Validate `kibo.hold.duration` is positive at startup in `KiboProperties` (zero/negative currently passes and every placement fails with a 500) per FR-008, Constitution XI (missing)
+- [ ] T091 Verify how a lost DB connection during commit surfaces (likely `TransactionSystemException` → 500) and map connectivity-caused `TransactionSystemException`, `QueryTimeoutException` and `TransientDataAccessResourceException` to 503 SERVICE_UNAVAILABLE, with a test per FR-029, Edge Cases (partial)
+- [ ] T092 Make `DataSeeder` safe when several instances start on an empty DB (count-then-insert can double-seed), e.g. insert-if-absent by a unique seed name, or document it as single-instance only per Constitution IX, T021 (partial)
+- [ ] T093 Record the as-built substitutions in tasks.md status notes: `ErrorCode` in `domain/exception` (T013); `ApiHeaders` + `@Pattern` instead of `HeaderValidation` (T022); `HoldResponse.from` instead of `HoldMapper` (T032); `HoldService.placeInTransaction` via `TransactionTemplate` instead of `HoldCreation` (T033); manual `ObjectMapper` instead of a Jackson message converter (T066); and close T017/T024 as superseded by `UnitRelease` + existing tests (their "events not published yet" note is stale) per tasks.md traceability (partial)
+- [ ] T094 Fix local-run docs: quickstart.md §1 omits `REDIS_PASSWORD` and `RABBITMQ_PORT`; `application-local.yml` (IDE run against compose) cannot work because compose exposes no MySQL/Redis ports and `.env` hosts are service names — document a ports override or remove the profile per quickstart.md, plan: configuration (partial)
+
+---
+
+## Phase 12: Convergence
+
+- [ ] T095 Reconcile the unrequested root `AI-USAGE.md` with T078: T078 specifies `docs/ai-review-log.md` (constitution-checklist review plus the SQL inspected for place/cancel/expire); either make `AI-USAGE.md` that record (and point T078 and the README at it) or link it from `docs/ai-review-log.md`, so there is one authoritative AI-review record per Constitution XVI, T078 (unrequested)

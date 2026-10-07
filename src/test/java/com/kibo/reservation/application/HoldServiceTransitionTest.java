@@ -3,6 +3,7 @@ package com.kibo.reservation.application;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.inOrder;
@@ -49,6 +50,7 @@ class HoldServiceTransitionTest {
     private static final Instant NOW = Instant.parse("2026-10-06T10:00:00Z");
     private static final long DROP_ID = 7L;
     private static final String OWNER = "alice";
+    private static final java.util.Set<HoldStatus> FROM_ACTIVE = java.util.EnumSet.of(HoldStatus.ACTIVE);
 
     private DropRepository drops;
     private HoldRepository holds;
@@ -80,7 +82,7 @@ class HoldServiceTransitionTest {
 
     @Test
     void confirmMovesActiveToConfirmedAndNeverTouchesInventory() {
-        when(holds.confirm(hold.getId(), OWNER, NOW)).thenAnswer(inv -> won(HoldStatus.CONFIRMED));
+        when(holds.moveBeforeExpiry(hold.getId(), OWNER, HoldStatus.CONFIRMED, FROM_ACTIVE, NOW)).thenAnswer(inv -> won(HoldStatus.CONFIRMED));
 
         Hold result = service.confirm(hold.getId(), OWNER);
 
@@ -93,7 +95,7 @@ class HoldServiceTransitionTest {
     @Test
     void confirmingAnAlreadyConfirmedHoldSucceedsAndChangesNothing() {
         setStatus(HoldStatus.CONFIRMED);
-        when(holds.confirm(hold.getId(), OWNER, NOW)).thenReturn(0);
+        when(holds.moveBeforeExpiry(hold.getId(), OWNER, HoldStatus.CONFIRMED, FROM_ACTIVE, NOW)).thenReturn(0);
 
         Hold result = service.confirm(hold.getId(), OWNER);
 
@@ -105,7 +107,7 @@ class HoldServiceTransitionTest {
     @Test
     void confirmingACancelledHoldIsRejectedWithItsCurrentStatus() {
         setStatus(HoldStatus.CANCELLED);
-        when(holds.confirm(hold.getId(), OWNER, NOW)).thenReturn(0);
+        when(holds.moveBeforeExpiry(hold.getId(), OWNER, HoldStatus.CONFIRMED, FROM_ACTIVE, NOW)).thenReturn(0);
 
         assertThatThrownBy(() -> service.confirm(hold.getId(), OWNER))
                 .isInstanceOfSatisfying(InvalidStateTransitionException.class, e -> {
@@ -119,7 +121,7 @@ class HoldServiceTransitionTest {
     @Test
     void confirmingAnExpiredHoldIsRejected() {
         setStatus(HoldStatus.EXPIRED);
-        when(holds.confirm(hold.getId(), OWNER, NOW)).thenReturn(0);
+        when(holds.moveBeforeExpiry(hold.getId(), OWNER, HoldStatus.CONFIRMED, FROM_ACTIVE, NOW)).thenReturn(0);
 
         assertThatThrownBy(() -> service.confirm(hold.getId(), OWNER)).isInstanceOf(HoldExpiredException.class);
         verifyNoInteractions(drops);
@@ -128,7 +130,7 @@ class HoldServiceTransitionTest {
     @Test
     void confirmingAnOverdueActiveHoldIsRejectedEvenThoughTheExpiryJobHasNotRun() {
         service = serviceAt(NOW.plus(Duration.ofMinutes(5))); // exactly at expiresAt: no longer confirmable
-        when(holds.confirm(hold.getId(), OWNER, NOW.plus(Duration.ofMinutes(5)))).thenReturn(0);
+        when(holds.moveBeforeExpiry(hold.getId(), OWNER, HoldStatus.CONFIRMED, FROM_ACTIVE, NOW.plus(Duration.ofMinutes(5)))).thenReturn(0);
 
         assertThatThrownBy(() -> service.confirm(hold.getId(), OWNER))
                 .isInstanceOfSatisfying(HoldExpiredException.class,
@@ -141,7 +143,7 @@ class HoldServiceTransitionTest {
     void confirmByAnotherCustomerLooksLikeNotFoundAndChangesNothing() {
         assertThatThrownBy(() -> service.confirm(hold.getId(), "mallory")).isInstanceOf(HoldNotFoundException.class);
 
-        verify(holds, never()).confirm(any(), any(), any());
+        verify(holds, never()).moveBeforeExpiry(any(), any(), eq(HoldStatus.CONFIRMED), any(), any());
         verifyNoInteractions(drops);
     }
 
@@ -153,14 +155,14 @@ class HoldServiceTransitionTest {
         assertThatThrownBy(() -> service.confirm(unknown, OWNER))
                 .isInstanceOfSatisfying(HoldNotFoundException.class,
                         e -> assertThat(e.code()).isEqualTo(ErrorCode.HOLD_NOT_FOUND));
-        verify(holds, never()).confirm(any(), any(), any());
+        verify(holds, never()).moveBeforeExpiry(any(), any(), eq(HoldStatus.CONFIRMED), any(), any());
     }
 
     // ----------------------------------------------------------------- cancel
 
     @Test
     void cancelMovesActiveToCancelledAndReturnsTheUnitsOnceInTheSameTransaction() {
-        when(holds.cancel(hold.getId(), OWNER, NOW)).thenAnswer(inv -> won(HoldStatus.CANCELLED));
+        when(holds.moveBeforeExpiry(hold.getId(), OWNER, HoldStatus.CANCELLED, FROM_ACTIVE, NOW)).thenAnswer(inv -> won(HoldStatus.CANCELLED));
         when(drops.releaseUnits(DROP_ID, 3, NOW)).thenReturn(1);
 
         Hold result = service.cancel(hold.getId(), OWNER);
@@ -168,7 +170,7 @@ class HoldServiceTransitionTest {
         assertThat(result.getStatus()).isEqualTo(HoldStatus.CANCELLED);
         InOrder order = inOrder(txManager, holds, drops);
         order.verify(txManager).getTransaction(any());
-        order.verify(holds).cancel(hold.getId(), OWNER, NOW);
+        order.verify(holds).moveBeforeExpiry(hold.getId(), OWNER, HoldStatus.CANCELLED, FROM_ACTIVE, NOW);
         order.verify(drops).releaseUnits(DROP_ID, 3, NOW); // exactly the hold's quantity, once
         order.verify(txManager).commit(any());
         verify(txManager, never()).rollback(any());
@@ -177,7 +179,7 @@ class HoldServiceTransitionTest {
     @Test
     void cancellingAnAlreadyCancelledHoldSucceedsAndReturnsNoUnits() {
         setStatus(HoldStatus.CANCELLED);
-        when(holds.cancel(hold.getId(), OWNER, NOW)).thenReturn(0);
+        when(holds.moveBeforeExpiry(hold.getId(), OWNER, HoldStatus.CANCELLED, FROM_ACTIVE, NOW)).thenReturn(0);
 
         Hold result = service.cancel(hold.getId(), OWNER);
 
@@ -189,7 +191,7 @@ class HoldServiceTransitionTest {
     @Test
     void cancellingAConfirmedHoldIsRejectedAndReturnsNoUnits() {
         setStatus(HoldStatus.CONFIRMED);
-        when(holds.cancel(hold.getId(), OWNER, NOW)).thenReturn(0);
+        when(holds.moveBeforeExpiry(hold.getId(), OWNER, HoldStatus.CANCELLED, FROM_ACTIVE, NOW)).thenReturn(0);
 
         assertThatThrownBy(() -> service.cancel(hold.getId(), OWNER))
                 .isInstanceOfSatisfying(InvalidStateTransitionException.class,
@@ -201,13 +203,13 @@ class HoldServiceTransitionTest {
     @Test
     void cancellingAnExpiredOrOverdueHoldIsRejectedAndReturnsNoUnits() {
         setStatus(HoldStatus.EXPIRED);
-        when(holds.cancel(hold.getId(), OWNER, NOW)).thenReturn(0);
+        when(holds.moveBeforeExpiry(hold.getId(), OWNER, HoldStatus.CANCELLED, FROM_ACTIVE, NOW)).thenReturn(0);
         assertThatThrownBy(() -> service.cancel(hold.getId(), OWNER)).isInstanceOf(HoldExpiredException.class);
 
         setStatus(HoldStatus.ACTIVE);
         Instant overdue = NOW.plus(Duration.ofMinutes(6));
         service = serviceAt(overdue);
-        when(holds.cancel(hold.getId(), OWNER, overdue)).thenReturn(0);
+        when(holds.moveBeforeExpiry(hold.getId(), OWNER, HoldStatus.CANCELLED, FROM_ACTIVE, overdue)).thenReturn(0);
         assertThatThrownBy(() -> service.cancel(hold.getId(), OWNER)).isInstanceOf(HoldExpiredException.class);
 
         verify(drops, never()).releaseUnits(anyLong(), anyInt(), any()); // only the settle step may return units
@@ -217,7 +219,7 @@ class HoldServiceTransitionTest {
     @Test
     void anExpiredRejectionStillAnswersHoldExpiredWhenSettlingFails() {
         service = serviceAt(NOW.plus(Duration.ofMinutes(6)));
-        when(holds.confirm(any(), any(), any())).thenReturn(0);
+        when(holds.moveBeforeExpiry(any(), any(), eq(HoldStatus.CONFIRMED), any(), any())).thenReturn(0);
         when(expiration.expireOne(any(), any())).thenThrow(new IllegalStateException("database hiccup"));
 
         assertThatThrownBy(() -> service.confirm(hold.getId(), OWNER)).isInstanceOf(HoldExpiredException.class);
@@ -226,7 +228,7 @@ class HoldServiceTransitionTest {
     @Test
     void settlingNeverHappensForRejectionsThatAreNotExpiry() {
         setStatus(HoldStatus.CONFIRMED);
-        when(holds.cancel(hold.getId(), OWNER, NOW)).thenReturn(0);
+        when(holds.moveBeforeExpiry(hold.getId(), OWNER, HoldStatus.CANCELLED, FROM_ACTIVE, NOW)).thenReturn(0);
 
         assertThatThrownBy(() -> service.cancel(hold.getId(), OWNER)).isInstanceOf(InvalidStateTransitionException.class);
         assertThatThrownBy(() -> service.cancel(hold.getId(), "mallory")).isInstanceOf(HoldNotFoundException.class);
@@ -238,13 +240,13 @@ class HoldServiceTransitionTest {
     void cancelByAnotherCustomerLooksLikeNotFoundAndReturnsNoUnits() {
         assertThatThrownBy(() -> service.cancel(hold.getId(), "mallory")).isInstanceOf(HoldNotFoundException.class);
 
-        verify(holds, never()).cancel(any(), any(), any());
+        verify(holds, never()).moveBeforeExpiry(any(), any(), eq(HoldStatus.CANCELLED), any(), any());
         verifyNoInteractions(drops);
     }
 
     @Test
     void ifTheUnitsCannotBeReturnedTheWholeCancellationRollsBack() {
-        when(holds.cancel(hold.getId(), OWNER, NOW)).thenAnswer(inv -> won(HoldStatus.CANCELLED));
+        when(holds.moveBeforeExpiry(hold.getId(), OWNER, HoldStatus.CANCELLED, FROM_ACTIVE, NOW)).thenAnswer(inv -> won(HoldStatus.CANCELLED));
         when(drops.releaseUnits(DROP_ID, 3, NOW)).thenReturn(0); // would exceed the drop's total: invariant broken
 
         assertThatThrownBy(() -> service.cancel(hold.getId(), OWNER))
@@ -256,7 +258,7 @@ class HoldServiceTransitionTest {
 
     @Test
     void aConfirmRaisesAConfirmedEventButACancelAfterTheUnitsAreReturnedRaisesACancelledEvent() {
-        when(holds.confirm(hold.getId(), OWNER, NOW)).thenAnswer(inv -> won(HoldStatus.CONFIRMED));
+        when(holds.moveBeforeExpiry(hold.getId(), OWNER, HoldStatus.CONFIRMED, FROM_ACTIVE, NOW)).thenAnswer(inv -> won(HoldStatus.CONFIRMED));
         service.confirm(hold.getId(), OWNER);
 
         ArgumentCaptor<Object> confirmed = ArgumentCaptor.forClass(Object.class);
@@ -269,7 +271,7 @@ class HoldServiceTransitionTest {
 
         Hold other = Hold.createActive(DROP_ID, OWNER, "k2", 2, NOW, Duration.ofMinutes(5));
         when(holds.findById(other.getId())).thenReturn(Optional.of(other));
-        when(holds.cancel(other.getId(), OWNER, NOW)).thenAnswer(inv -> {
+        when(holds.moveBeforeExpiry(other.getId(), OWNER, HoldStatus.CANCELLED, FROM_ACTIVE, NOW)).thenAnswer(inv -> {
             ReflectionTestUtils.setField(other, "status", HoldStatus.CANCELLED);
             return 1;
         });
@@ -292,7 +294,7 @@ class HoldServiceTransitionTest {
     @Test
     void repeatsRejectionsAndAFailedReturnRaiseNoEvent() {
         setStatus(HoldStatus.CANCELLED);
-        when(holds.cancel(hold.getId(), OWNER, NOW)).thenReturn(0);
+        when(holds.moveBeforeExpiry(hold.getId(), OWNER, HoldStatus.CANCELLED, FROM_ACTIVE, NOW)).thenReturn(0);
         service.cancel(hold.getId(), OWNER); // repeat
 
         assertThatThrownBy(() -> service.confirm(hold.getId(), OWNER)) // wrong state
@@ -300,7 +302,7 @@ class HoldServiceTransitionTest {
         assertThatThrownBy(() -> service.confirm(hold.getId(), "mallory")).isInstanceOf(HoldNotFoundException.class);
 
         setStatus(HoldStatus.ACTIVE);
-        when(holds.cancel(hold.getId(), OWNER, NOW)).thenAnswer(inv -> won(HoldStatus.CANCELLED));
+        when(holds.moveBeforeExpiry(hold.getId(), OWNER, HoldStatus.CANCELLED, FROM_ACTIVE, NOW)).thenAnswer(inv -> won(HoldStatus.CANCELLED));
         when(drops.releaseUnits(DROP_ID, 3, NOW)).thenReturn(0);
         assertThatThrownBy(() -> service.cancel(hold.getId(), OWNER)).isInstanceOf(InventoryInvariantViolationException.class);
 
@@ -313,6 +315,42 @@ class HoldServiceTransitionTest {
     private int won(HoldStatus newStatus) {
         setStatus(newStatus);
         return 1;
+    }
+
+    @Test
+    void theLegalSourceStatesPassedToTheGuardedUpdateComeFromTheTransitionTable() {
+        when(holds.moveBeforeExpiry(any(), any(), any(), any(), any())).thenAnswer(inv -> won(inv.getArgument(2)));
+        when(drops.releaseUnits(DROP_ID, 3, NOW)).thenReturn(1);
+
+        service.confirm(hold.getId(), OWNER);
+        setStatus(HoldStatus.ACTIVE);
+        service.cancel(hold.getId(), OWNER);
+
+        org.mockito.ArgumentCaptor<java.util.Collection<HoldStatus>> sources = org.mockito.ArgumentCaptor.forClass(java.util.Collection.class);
+        verify(holds, org.mockito.Mockito.times(2)).moveBeforeExpiry(any(), eq(OWNER), any(), sources.capture(), eq(NOW));
+        assertThat(sources.getAllValues()).containsExactly(
+                HoldStatus.sourcesOf(HoldStatus.CONFIRMED), HoldStatus.sourcesOf(HoldStatus.CANCELLED));
+    }
+
+    @Test
+    void aLoserIsClassifiedByTheTableAFinalStateHoldCannotMoveSoItIsAnInvalidTransition() {
+        for (HoldStatus finalState : new HoldStatus[] {HoldStatus.CONFIRMED, HoldStatus.CANCELLED}) {
+            HoldStatus target = finalState == HoldStatus.CONFIRMED ? HoldStatus.CANCELLED : HoldStatus.CONFIRMED;
+            setStatus(finalState);
+            when(holds.moveBeforeExpiry(any(), any(), eq(target), any(), any())).thenReturn(0);
+
+            org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.transitionInTransaction(hold.getId(), OWNER, target, NOW))
+                    .isInstanceOf(com.kibo.reservation.domain.exception.InvalidStateTransitionException.class);
+        }
+    }
+
+    @Test
+    void aTargetNoStateMayMoveToIsRefusedBeforeTouchingTheDatabase() {
+        org.assertj.core.api.Assertions.assertThatThrownBy(
+                        () -> service.transitionInTransaction(hold.getId(), OWNER, HoldStatus.ACTIVE, NOW))
+                .isInstanceOf(IllegalArgumentException.class);
+
+        verify(holds, never()).moveBeforeExpiry(any(), any(), any(), any(), any());
     }
 
     private void setStatus(HoldStatus status) {

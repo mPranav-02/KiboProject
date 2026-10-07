@@ -47,6 +47,7 @@ class HoldExpirationServiceTest {
     private static final Instant CREATED = Instant.parse("2026-10-06T10:00:00Z");
     private static final long DROP_ID = 7L;
     private static final int BATCH = 2;
+    private static final java.util.Set<HoldStatus> FROM_ACTIVE = java.util.EnumSet.of(HoldStatus.ACTIVE);
 
     private DropRepository drops;
     private HoldRepository holds;
@@ -75,14 +76,14 @@ class HoldExpirationServiceTest {
     void expiringAnOverdueHoldChangesItsStatusThenReturnsExactlyItsUnitsInOneCommittedTransaction() {
         Hold hold = overdueHold(3);
         when(holds.findById(hold.getId())).thenReturn(Optional.of(hold));
-        when(holds.expire(hold.getId(), NOW)).thenReturn(1);
+        when(holds.moveAtOrAfterExpiry(hold.getId(), HoldStatus.EXPIRED, FROM_ACTIVE, NOW)).thenReturn(1);
         when(drops.releaseUnits(DROP_ID, 3, NOW)).thenReturn(1);
 
         assertThat(service.expireOne(hold.getId(), NOW)).isEqualTo(Outcome.EXPIRED);
 
         InOrder order = inOrder(txManager, holds, drops);
         order.verify(txManager).getTransaction(any());
-        order.verify(holds).expire(hold.getId(), NOW);
+        order.verify(holds).moveAtOrAfterExpiry(hold.getId(), HoldStatus.EXPIRED, FROM_ACTIVE, NOW);
         order.verify(drops).releaseUnits(DROP_ID, 3, NOW);
         order.verify(txManager).commit(any());
         verify(txManager, never()).rollback(any());
@@ -93,12 +94,36 @@ class HoldExpirationServiceTest {
         // already confirmed/cancelled/expired by someone else, or not due yet
         Hold hold = overdueHold(3);
         when(holds.findById(hold.getId())).thenReturn(Optional.of(hold));
-        when(holds.expire(hold.getId(), NOW)).thenReturn(0);
+        when(holds.moveAtOrAfterExpiry(hold.getId(), HoldStatus.EXPIRED, FROM_ACTIVE, NOW)).thenReturn(0);
 
         assertThat(service.expireOne(hold.getId(), NOW)).isEqualTo(Outcome.SKIPPED);
 
         verify(drops, never()).releaseUnits(anyLong(), anyInt(), any());
         verify(txManager).commit(any());
+    }
+
+    @Test
+    void aHoldInAFinalStateIsSkippedBecauseTheTransitionTableForbidsMovingIt() {
+        for (HoldStatus finalState : new HoldStatus[] {HoldStatus.CONFIRMED, HoldStatus.CANCELLED, HoldStatus.EXPIRED}) {
+            Hold hold = overdueHold(3);
+            org.springframework.test.util.ReflectionTestUtils.setField(hold, "status", finalState);
+            when(holds.findById(hold.getId())).thenReturn(Optional.of(hold));
+
+            assertThat(service.expireOne(hold.getId(), NOW)).as(finalState.name()).isEqualTo(Outcome.SKIPPED);
+        }
+        verify(holds, never()).moveAtOrAfterExpiry(any(), any(), any(), any());
+        verify(drops, never()).releaseUnits(anyLong(), anyInt(), any());
+    }
+
+    @Test
+    void theSourceStatesComeFromTheTransitionTable() {
+        Hold hold = overdueHold(1);
+        when(holds.findById(hold.getId())).thenReturn(Optional.of(hold));
+        when(holds.moveAtOrAfterExpiry(any(), any(), any(), any())).thenReturn(0);
+
+        service.expireOne(hold.getId(), NOW);
+
+        verify(holds).moveAtOrAfterExpiry(hold.getId(), HoldStatus.EXPIRED, HoldStatus.sourcesOf(HoldStatus.EXPIRED), NOW);
     }
 
     @Test
@@ -108,7 +133,7 @@ class HoldExpirationServiceTest {
 
         assertThat(service.expireOne(unknown, NOW)).isEqualTo(Outcome.SKIPPED);
 
-        verify(holds, never()).expire(any(), any());
+        verify(holds, never()).moveAtOrAfterExpiry(any(), any(), any(), any());
         verify(drops, never()).releaseUnits(anyLong(), anyInt(), any());
     }
 
@@ -116,7 +141,7 @@ class HoldExpirationServiceTest {
     void ifTheUnitsCannotBeReturnedTheExpiryRollsBackWithThem() {
         Hold hold = overdueHold(3);
         when(holds.findById(hold.getId())).thenReturn(Optional.of(hold));
-        when(holds.expire(hold.getId(), NOW)).thenReturn(1);
+        when(holds.moveAtOrAfterExpiry(hold.getId(), HoldStatus.EXPIRED, FROM_ACTIVE, NOW)).thenReturn(1);
         when(drops.releaseUnits(DROP_ID, 3, NOW)).thenReturn(0); // would exceed the drop's total
 
         assertThatThrownBy(() -> service.expireOne(hold.getId(), NOW))
@@ -139,7 +164,7 @@ class HoldExpirationServiceTest {
         Summary summary = service.expireOverdue(NOW);
 
         assertThat(summary).isEqualTo(new Summary(3, 3, 0));
-        verify(holds, times(2)).findOverdueActiveIds(eq(NOW), any(Pageable.class));
+        verify(holds, times(2)).findOverdueIds(any(), eq(NOW), any(Pageable.class));
         verify(drops, times(3)).releaseUnits(eq(DROP_ID), eq(1), eq(NOW));
     }
 
@@ -149,7 +174,7 @@ class HoldExpirationServiceTest {
 
         assertThat(service.expireOverdue(NOW)).isEqualTo(new Summary(0, 0, 0));
 
-        verify(holds, never()).expire(any(), any());
+        verify(holds, never()).moveAtOrAfterExpiry(any(), any(), any(), any());
         verify(drops, never()).releaseUnits(anyLong(), anyInt(), any());
     }
 
@@ -158,13 +183,13 @@ class HoldExpirationServiceTest {
         // two candidates that another sweeper already expired: every guarded update affects 0 rows
         Hold a = overdueHold(1), b = overdueHold(1);
         when(holds.findById(any())).thenAnswer(inv -> Optional.of(inv.getArgument(0).equals(a.getId()) ? a : b));
-        when(holds.findOverdueActiveIds(eq(NOW), any(Pageable.class))).thenReturn(List.of(a.getId(), b.getId()));
-        when(holds.expire(any(), eq(NOW))).thenReturn(0);
+        when(holds.findOverdueIds(any(), eq(NOW), any(Pageable.class))).thenReturn(List.of(a.getId(), b.getId()));
+        when(holds.moveAtOrAfterExpiry(any(), eq(HoldStatus.EXPIRED), any(), eq(NOW))).thenReturn(0);
 
         Summary summary = service.expireOverdue(NOW);
 
         assertThat(summary).isEqualTo(new Summary(2, 0, 0));
-        verify(holds, times(1)).findOverdueActiveIds(eq(NOW), any(Pageable.class)); // did not loop forever
+        verify(holds, times(1)).findOverdueIds(any(), eq(NOW), any(Pageable.class)); // did not loop forever
         verify(drops, never()).releaseUnits(anyLong(), anyInt(), any());
     }
 
@@ -173,7 +198,7 @@ class HoldExpirationServiceTest {
         Hold bad = overdueHold(1), good = overdueHold(1);
         givenPages(List.of(bad.getId(), good.getId()), List.of());
         when(holds.findById(bad.getId())).thenReturn(Optional.of(bad));
-        when(holds.expire(bad.getId(), NOW)).thenThrow(new IllegalStateException("lock wait timeout"));
+        when(holds.moveAtOrAfterExpiry(bad.getId(), HoldStatus.EXPIRED, FROM_ACTIVE, NOW)).thenThrow(new IllegalStateException("lock wait timeout"));
         givenExpires(good);
 
         Summary summary = service.expireOverdue(NOW);
@@ -188,7 +213,7 @@ class HoldExpirationServiceTest {
     void anExpiryRaisesOneExpiredEventAfterTheUnitsAreReturnedAndASkipOrFailureRaisesNone() {
         Hold hold = overdueHold(3);
         when(holds.findById(hold.getId())).thenReturn(Optional.of(hold));
-        when(holds.expire(hold.getId(), NOW)).thenReturn(1);
+        when(holds.moveAtOrAfterExpiry(hold.getId(), HoldStatus.EXPIRED, FROM_ACTIVE, NOW)).thenReturn(1);
         when(drops.releaseUnits(DROP_ID, 3, NOW)).thenReturn(1);
 
         service.expireOne(hold.getId(), NOW);
@@ -208,11 +233,11 @@ class HoldExpirationServiceTest {
         // nothing more for a skipped hold or for a failed return
         Hold skipped = overdueHold(1);
         when(holds.findById(skipped.getId())).thenReturn(Optional.of(skipped));
-        when(holds.expire(skipped.getId(), NOW)).thenReturn(0);
+        when(holds.moveAtOrAfterExpiry(skipped.getId(), HoldStatus.EXPIRED, FROM_ACTIVE, NOW)).thenReturn(0);
         service.expireOne(skipped.getId(), NOW);
         Hold broken = overdueHold(1);
         when(holds.findById(broken.getId())).thenReturn(Optional.of(broken));
-        when(holds.expire(broken.getId(), NOW)).thenReturn(1);
+        when(holds.moveAtOrAfterExpiry(broken.getId(), HoldStatus.EXPIRED, FROM_ACTIVE, NOW)).thenReturn(1);
         when(drops.releaseUnits(DROP_ID, 1, NOW)).thenReturn(0);
         assertThatThrownBy(() -> service.expireOne(broken.getId(), NOW)).isInstanceOf(InventoryInvariantViolationException.class);
         verify(events, times(1)).publishEvent(org.mockito.ArgumentMatchers.<Object>any());
@@ -221,7 +246,7 @@ class HoldExpirationServiceTest {
     // ---------------------------------------------------------------- helpers
 
     private void givenPages(List<UUID> first, List<UUID>... rest) {
-        var stub = when(holds.findOverdueActiveIds(eq(NOW), any(Pageable.class))).thenReturn(first);
+        var stub = when(holds.findOverdueIds(any(), eq(NOW), any(Pageable.class))).thenReturn(first);
         for (List<UUID> page : rest) {
             stub = stub.thenReturn(page);
         }
@@ -229,7 +254,7 @@ class HoldExpirationServiceTest {
 
     private void givenExpires(Hold hold) {
         when(holds.findById(hold.getId())).thenReturn(Optional.of(hold));
-        when(holds.expire(hold.getId(), NOW)).thenReturn(1);
+        when(holds.moveAtOrAfterExpiry(hold.getId(), HoldStatus.EXPIRED, FROM_ACTIVE, NOW)).thenReturn(1);
         when(drops.releaseUnits(DROP_ID, hold.getQuantity(), NOW)).thenReturn(1);
     }
 

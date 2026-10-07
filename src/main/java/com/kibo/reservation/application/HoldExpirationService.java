@@ -9,6 +9,7 @@ import com.kibo.reservation.repository.HoldRepository;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -26,7 +27,7 @@ import org.springframework.transaction.support.TransactionTemplate;
  * <ul>
  *   <li>Finding candidates is a plain, lock-free read. It is only a list of ids to try.</li>
  *   <li>Each hold is expired in its OWN transaction by ONE guarded UPDATE
- *       ({@code WHERE status = 'ACTIVE' AND expires_at <= now}). InnoDB serializes competing updates of the
+ *       ({@code WHERE status IN (legal sources) AND expires_at <= now}). InnoDB serializes competing updates of the
  *       row and re-evaluates the guard against the latest committed state, so when an expire, a cancel and a
  *       confirm compete, exactly one affects a row.</li>
  *   <li>Units are returned in that same transaction and only when the update affected exactly one row, so
@@ -40,6 +41,9 @@ import org.springframework.transaction.support.TransactionTemplate;
 public class HoldExpirationService {
 
     private static final Logger log = LoggerFactory.getLogger(HoldExpirationService.class);
+
+    /** The states that may move to EXPIRED, taken from the transition table (HoldStatus), never hard-coded here. */
+    private static final Set<HoldStatus> EXPIRABLE_FROM = HoldStatus.sourcesOf(HoldStatus.EXPIRED);
 
     /** Outcome of trying to expire one hold. */
     public enum Outcome {
@@ -78,7 +82,7 @@ public class HoldExpirationService {
         int expired = 0;
         int failed = 0;
         while (true) {
-            List<UUID> page = holds.findOverdueActiveIds(now, PageRequest.of(0, batchSize));
+            List<UUID> page = holds.findOverdueIds(EXPIRABLE_FROM, now, PageRequest.of(0, batchSize));
             found += page.size();
             int expiredInPage = 0;
             for (UUID id : page) {
@@ -120,7 +124,10 @@ public class HoldExpirationService {
         if (hold.isEmpty()) {
             return Outcome.SKIPPED;
         }
-        if (holds.expire(holdId, now) != 1) {
+        if (!hold.get().getStatus().canTransitionTo(HoldStatus.EXPIRED)) {
+            return Outcome.SKIPPED; // already CONFIRMED/CANCELLED/EXPIRED: final states never move again
+        }
+        if (holds.moveAtOrAfterExpiry(holdId, HoldStatus.EXPIRED, EXPIRABLE_FROM, now) != 1) {
             return Outcome.SKIPPED; // someone else resolved it first, or it is not due yet
         }
         UnitRelease.returnUnits(drops, hold.get(), now); // throws, rolling the status change back, if it cannot

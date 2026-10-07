@@ -268,11 +268,11 @@ class ConfirmCancelIT extends AbstractMySqlIT {
     }
 
     private int confirmAt(TransactionTemplate tx, UUID id, Instant now) {
-        return tx.execute(s -> holds.confirm(id, "alice", now));
+        return tx.execute(s -> holds.moveBeforeExpiry(id, "alice", HoldStatus.CONFIRMED, HoldStatus.sourcesOf(HoldStatus.CONFIRMED), now));
     }
 
     private int cancelAt(TransactionTemplate tx, UUID id, Instant now) {
-        return tx.execute(s -> holds.cancel(id, "alice", now));
+        return tx.execute(s -> holds.moveBeforeExpiry(id, "alice", HoldStatus.CANCELLED, HoldStatus.sourcesOf(HoldStatus.CANCELLED), now));
     }
 
     private int available() {

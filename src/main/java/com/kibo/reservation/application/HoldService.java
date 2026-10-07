@@ -19,6 +19,7 @@ import com.kibo.reservation.repository.HoldRepository;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -45,7 +46,8 @@ import org.springframework.transaction.support.TransactionTemplate;
  * (see {@link HoldExpirationService}) rather than waiting for the next sweep.
  *
  * <p><b>Confirm and cancel</b> each run in ONE read-write transaction around ONE guarded UPDATE of the hold
- * ({@code WHERE status = 'ACTIVE' AND expires_at > now}). Its affected-row count is the verdict: 1 means this
+ * ({@code WHERE status IN (legal sources) AND expires_at > now}, the sources coming from
+ * {@link HoldStatus#sourcesOf}). Its affected-row count is the verdict: 1 means this
  * request won the transition. Cancel then returns the units in the same transaction, and only on that 1-row
  * path, so a hold's units can be returned at most once however many cancels (or confirms) race. If the
  * return fails, the whole transaction, including the status change, rolls back.
@@ -97,24 +99,35 @@ public class HoldService {
         } catch (DataIntegrityViolationException duplicateKey) {
             // A concurrent request with the same customer + request key committed first. Our whole
             // transaction, including its inventory decrement, has been rolled back. Replay theirs.
-            HoldPlacement replay = readTransaction.execute(status -> holds
-                    .findByCustomerIdAndRequestKey(command.customerId(), command.requestKey())
-                    .map(existing -> replayOf(existing, command))
-                    .orElse(null));
+            HoldPlacement replay;
+            try {
+                replay = readTransaction.execute(status -> holds
+                        .findByCustomerIdAndRequestKey(command.customerId(), command.requestKey())
+                        .map(existing -> replayOf(existing, command))
+                        .orElse(null));
+            } catch (DomainException rejected) { // e.g. IDEMPOTENCY_KEY_CONFLICT found while replaying
+                logPlacementRejected(command, rejected);
+                throw rejected;
+            }
             if (replay == null) {
                 throw duplicateKey; // some other integrity problem, not a duplicate request key
             }
             logPlacement(replay);
             return replay;
         } catch (DomainException rejected) {
-            log.atInfo()
-                    .addKeyValue("dropId", command.dropId())
-                    .addKeyValue("customerId", command.customerId())
-                    .addKeyValue("quantity", command.quantity())
-                    .addKeyValue("code", rejected.code())
-                    .log("Hold request rejected");
+            logPlacementRejected(command, rejected);
             throw rejected;
         }
+    }
+
+    /** Every rejected placement is logged with its context and error code (FR-031); the request key is not. */
+    private static void logPlacementRejected(PlaceHoldCommand command, DomainException rejected) {
+        log.atInfo()
+                .addKeyValue("dropId", command.dropId())
+                .addKeyValue("customerId", command.customerId())
+                .addKeyValue("quantity", command.quantity())
+                .addKeyValue("code", rejected.code())
+                .log("Hold request rejected");
     }
 
     /** Everything here commits or rolls back together. Package-private for tests. */
@@ -185,6 +198,27 @@ public class HoldService {
         return transition(holdId, customerId, HoldStatus.CANCELLED);
     }
 
+    /**
+     * A customer's own hold, as stored (US5, FR-022). Read-only: it never settles an overdue hold, so the
+     * caller shows {@link Hold#effectiveStatus(Instant)} (an ACTIVE hold past its expiry reads as EXPIRED).
+     * Another customer's hold, an unknown id and a malformed id are all the same "not found", so the
+     * endpoint cannot be used to discover whose hold an id is (FR-022a).
+     *
+     * @throws HoldNotFoundException unknown hold or not this customer's hold
+     */
+    public Hold getHold(UUID holdId, String customerId) {
+        Optional<Hold> hold = readTransaction.execute(status -> holds.findById(holdId)
+                .filter(h -> h.isOwnedBy(customerId)));
+        return hold.orElseThrow(() -> {
+            log.atInfo()
+                    .addKeyValue("holdId", holdId)
+                    .addKeyValue("customerId", customerId)
+                    .addKeyValue("code", "HOLD_NOT_FOUND")
+                    .log("Hold lookup rejected");
+            return new HoldNotFoundException(holdId.toString());
+        });
+    }
+
     private Hold transition(UUID holdId, String customerId, HoldStatus target) {
         try {
             HoldTransition result = writeTransaction.execute(
@@ -198,16 +232,18 @@ public class HoldService {
                     .log(result.changed() ? "Hold state changed" : "Hold request repeated, nothing changed");
             return result.hold();
         } catch (HoldExpiredException expired) {
-            settleExpired(holdId, customerId, target, expired);
+            // Already logged with the hold's drop and quantity where it was detected (rejectedTransition).
+            settleExpired(holdId);
             throw expired;
-        } catch (DomainException rejected) {
+        } catch (HoldNotFoundException notFound) {
+            // Unknown hold or someone else's: say nothing about the hold itself (no drop, no quantity).
             log.atInfo()
                     .addKeyValue("holdId", holdId)
                     .addKeyValue("customerId", customerId)
                     .addKeyValue("requested", target)
-                    .addKeyValue("code", rejected.code())
+                    .addKeyValue("code", notFound.code())
                     .log("Hold transition rejected");
-            throw rejected;
+            throw notFound;
         }
     }
 
@@ -216,19 +252,30 @@ public class HoldService {
      * of units, in its own transaction) instead of leaving it for the next sweep. Best effort: the customer
      * gets HOLD_EXPIRED either way, and the sweep will finish the job if this fails.
      */
-    private void settleExpired(UUID holdId, String customerId, HoldStatus target, HoldExpiredException expired) {
+    private void settleExpired(UUID holdId) {
         try {
             expiration.expireOne(holdId, clock.instant());
         } catch (RuntimeException e) {
             log.atWarn().addKeyValue("holdId", holdId).setCause(e)
                     .log("Could not settle expired hold on contact; the expiry sweep will");
         }
+    }
+
+    /**
+     * Logs a rejected confirm/cancel for a hold this customer owns, with the hold's drop and quantity
+     * (FR-031), and returns the exception to throw.
+     */
+    private <E extends DomainException> E rejectedTransition(Hold hold, HoldStatus target, E rejection) {
         log.atInfo()
-                .addKeyValue("holdId", holdId)
-                .addKeyValue("customerId", customerId)
+                .addKeyValue("holdId", hold.getId())
+                .addKeyValue("dropId", hold.getDropId())
+                .addKeyValue("customerId", hold.getCustomerId())
+                .addKeyValue("quantity", hold.getQuantity())
                 .addKeyValue("requested", target)
-                .addKeyValue("code", expired.code())
+                .addKeyValue("currentStatus", hold.getStatus())
+                .addKeyValue("code", rejection.code())
                 .log("Hold transition rejected");
+        return rejection;
     }
 
     /**
@@ -249,20 +296,19 @@ public class HoldService {
                 .filter(h -> h.isOwnedBy(customerId))
                 .orElseThrow(() -> new HoldNotFoundException(holdId.toString()));
 
-        int changed = switch (target) {
-            case CONFIRMED -> holds.confirm(holdId, customerId, now);
-            case CANCELLED -> holds.cancel(holdId, customerId, now);
-            default -> throw new IllegalArgumentException("Not a customer transition: " + target);
-        };
+        // The transition table is HoldStatus: the repository only enforces it atomically, it never decides it.
+        Set<HoldStatus> sources = HoldStatus.sourcesOf(target);
+        if (sources.isEmpty()) {
+            throw new IllegalArgumentException("No hold state can move to " + target);
+        }
+        int changed = holds.moveBeforeExpiry(holdId, customerId, target, sources, now);
 
         if (changed == 1) {
-            if (target == HoldStatus.CANCELLED) {
+            if (target.returnsUnitsOnEntry()) {
                 UnitRelease.returnUnits(drops, hold, now); // throws (rolling everything back) if it cannot
             }
             Hold updated = reload(holdId);
-            events.publishEvent(HoldLifecycleEvent.of(target == HoldStatus.CONFIRMED
-                    ? HoldLifecycleEvent.Type.HOLD_CONFIRMED : HoldLifecycleEvent.Type.HOLD_CANCELLED,
-                    updated, target, now));
+            events.publishEvent(HoldLifecycleEvent.of(lifecycleEventFor(target), updated, target, now));
             return new HoldTransition(updated, true);
         }
 
@@ -273,15 +319,25 @@ public class HoldService {
             return new HoldTransition(current, false); // repeated confirm/cancel: idempotent success
         }
         if (current.effectiveStatus(now) == HoldStatus.EXPIRED) {
-            throw new HoldExpiredException(holdId, current.getExpiresAt());
+            throw rejectedTransition(current, target, new HoldExpiredException(holdId, current.getExpiresAt()));
         }
-        if (current.getStatus() == HoldStatus.ACTIVE) {
-            // Guard failed although the hold is ACTIVE and not overdue: impossible unless the guard or the
-            // clock is broken. Fail loudly instead of guessing.
-            throw new IllegalStateException("Guarded transition to " + target + " changed nothing for ACTIVE hold "
-                    + holdId);
+        if (current.getStatus().canTransitionTo(target)) {
+            // The table allows it and the hold is not overdue, yet the guarded update changed nothing:
+            // impossible unless the guard or the clock is broken. Fail loudly instead of guessing.
+            throw new IllegalStateException("Guarded transition to " + target + " changed nothing for "
+                    + current.getStatus() + " hold " + holdId);
         }
-        throw new InvalidStateTransitionException(holdId, current.getStatus(), target);
+        throw rejectedTransition(current, target,
+                new InvalidStateTransitionException(holdId, current.getStatus(), target));
+    }
+
+    private static HoldLifecycleEvent.Type lifecycleEventFor(HoldStatus target) {
+        return switch (target) {
+            case CONFIRMED -> HoldLifecycleEvent.Type.HOLD_CONFIRMED;
+            case CANCELLED -> HoldLifecycleEvent.Type.HOLD_CANCELLED;
+            case EXPIRED -> HoldLifecycleEvent.Type.HOLD_EXPIRED;
+            case ACTIVE -> HoldLifecycleEvent.Type.HOLD_CREATED;
+        };
     }
 
     private Hold reload(UUID holdId) {
@@ -292,8 +348,15 @@ public class HoldService {
     record HoldTransition(Hold hold, boolean changed) {
     }
 
+    /**
+     * A replay returns the earlier hold only when it is THIS customer's hold for the same request. The
+     * lookup is already by (customer, key) on a case-sensitive column; the owner check is defence in depth, so
+     * that a lookup that ever matched someone else's hold (a collation mistake, say) can never hand out
+     * that hold's id or data: it is refused as a key conflict, which reveals nothing about the other hold.
+     */
     private static HoldPlacement replayOf(Hold existing, PlaceHoldCommand command) {
-        if (!existing.matchesRequest(command.dropId(), command.quantity())) {
+        if (!existing.isOwnedBy(command.customerId())
+                || !existing.matchesRequest(command.dropId(), command.quantity())) {
             throw new IdempotencyKeyConflictException(command.requestKey());
         }
         return new HoldPlacement(existing, false);
