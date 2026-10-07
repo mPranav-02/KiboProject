@@ -1,6 +1,7 @@
 package com.kibo.reservation.config;
 
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.AssertTrue;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotNull;
 import java.time.Duration;
@@ -21,6 +22,12 @@ public record KiboProperties(
 
     /** How long a hold lasts (default PT5M) and the per-hold unit maximum for new drops (default 4). */
     public record HoldSettings(@NotNull Duration duration, @Min(1) int defaultMaxPerHold) {
+
+        /** A zero or negative duration would create holds that are already expired: refuse to start instead. */
+        @AssertTrue(message = "must be a positive duration")
+        public boolean isDurationPositive() {
+            return duration == null || duration.isPositive();
+        }
     }
 
     /** Expiry sweep interval (default PT2S, must keep release within 10s, FR-018) and batch size. */

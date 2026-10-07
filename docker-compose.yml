@@ -1,11 +1,19 @@
 # Local runtime: app + MySQL (source of truth) + Redis (cache only) + RabbitMQ (events only).
-# All credentials come from .env (gitignored); copy .env.example to .env first.
-# `${VAR:?...}` makes compose fail fast when a required variable is missing.
+# `docker compose up --build` works on a fresh clone. No hosts or credentials are written here (Constitution XIV):
+# every service reads the committed, LOCAL-ONLY placeholders in .env.example, and then an optional .env
+# (gitignored), whose values win. To change anything, copy .env.example to .env and edit it.
+# The infrastructure images expect their own variable names, so each one maps them from the shared
+# DB_* / REDIS_* / RABBITMQ_* names at container start ($$ = evaluated inside the container).
+
+x-env-files: &env-files
+  - path: .env.example
+  - path: .env
+    required: false
 
 services:
   app:
     build: .
-    env_file: .env
+    env_file: *env-files
     ports:
       - "8080:8080"
     depends_on:
@@ -24,11 +32,13 @@ services:
 
   mysql:
     image: mysql:8.4
+    env_file: *env-files
     environment:
       MYSQL_DATABASE: kibo
-      MYSQL_USER: ${DB_USERNAME:?DB_USERNAME must be set in .env}
-      MYSQL_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD must be set in .env}
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD must be set in .env}
+    entrypoint:
+      - sh
+      - -c
+      - 'export MYSQL_USER="$$DB_USERNAME" MYSQL_PASSWORD="$$DB_PASSWORD"; exec docker-entrypoint.sh mysqld'
     volumes:
       - mysql-data:/var/lib/mysql
     healthcheck:
@@ -41,8 +51,7 @@ services:
 
   redis:
     image: redis:7
-    environment:
-      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD must be set in .env}
+    env_file: *env-files
     command: ["sh", "-c", "exec redis-server --requirepass \"$$REDIS_PASSWORD\""]
     healthcheck:
       test: ["CMD-SHELL", "REDISCLI_AUTH=\"$$REDIS_PASSWORD\" redis-cli ping | grep -q PONG"]
@@ -52,9 +61,11 @@ services:
 
   rabbitmq:
     image: rabbitmq:4-management
-    environment:
-      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USERNAME:?RABBITMQ_USERNAME must be set in .env}
-      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?RABBITMQ_PASSWORD must be set in .env}
+    env_file: *env-files
+    entrypoint:
+      - sh
+      - -c
+      - 'export RABBITMQ_DEFAULT_USER="$$RABBITMQ_USERNAME" RABBITMQ_DEFAULT_PASS="$$RABBITMQ_PASSWORD"; exec docker-entrypoint.sh rabbitmq-server'
     ports:
       - "5672:5672"
       - "15672:15672"

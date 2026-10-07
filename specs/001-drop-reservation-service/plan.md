@@ -96,7 +96,7 @@ endpoints; 2 tables.
 | XI | REST semantics, structured errors | 201/200/400/404/409/503; RFC 7807 `ProblemDetail` with stable `code` via one `@RestControllerAdvice`. See [contracts/openapi.yaml](./contracts/openapi.yaml). | ✅ | ✅ |
 | XII | Tests target concurrency, transitions, expiry, failure | Test matrix in research.md §10. Concurrency, race, idempotency, expiry and infra-down ITs are first-class tasks. | ✅ | ✅ |
 | XIII | Unit tests without live infra | `mvn test` uses Mockito and WebMvcTest only. DB-level guarantees are proven in separate `*IT` Testcontainers tests. | ✅ | ✅ |
-| XIV | No hardcoded hosts or credentials | `application.yml` uses `${ENV}` with no host or credential defaults. Compose reads `.env` (gitignored). `.env.example` holds local-only placeholders. | ✅ | ✅ |
+| XIV | No hardcoded hosts or credentials | `application.yml` uses `${ENV}` with no host or credential defaults. `docker-compose.yml` holds no credentials: every service reads the committed local-only placeholders in `.env.example`, then an optional gitignored `.env` that overrides them, so `docker compose up --build` works on a fresh clone. | ✅ | ✅ |
 | XV | Simplicity | One deployable, two tables, no distributed locks, no outbox, no consumers. Redis and RabbitMQ are justified below. | ⚠️ justified | ⚠️ justified |
 | XVI | AI code reviewed and validated | Tasks include a human review checkpoint per story and require running ITs and inspecting SQL logs before acceptance. | ✅ | ✅ |
 | XVII | Decisions documented | research.md records decisions and rejected alternatives. Implementation produces `docs/*.md` and `docs/decisions/` ADRs. | ✅ | ✅ |
@@ -125,7 +125,7 @@ specs/001-drop-reservation-service/
 pom.xml
 Dockerfile
 docker-compose.yml
-.env.example                       # local-only placeholders; .env is gitignored
+.env.example                       # local-only placeholders read by compose; optional .env (gitignored) overrides
 README.md                          # overview, how to run, links to docs/
 docs/
 ├── architecture.md
@@ -180,5 +180,6 @@ the two-day scope, and the domain stays testable because repositories are interf
 |------------------------------|------------|--------------------------------------|
 | Redis cache (XV) | Required by the assignment; drop reads are the read-heavy path | No cache is simpler but doesn't meet the brief. Risk is contained: read-only, TTL-bounded, failure-tolerant, never used for decisions. |
 | RabbitMQ events with no consumer in scope (XV) | Required by the assignment; lets downstream systems react to lifecycle changes | Logging only doesn't meet the brief. Kept in an isolated adapter, published after commit, never affects correctness. |
+| Demo `AuditEventConsumer` on `kibo.holds.audit` (XV, added during implementation) | Shows the topology working end to end: each event is logged by the app as it arrives | Leaving the queue unconsumed lets it grow forever on a long-running stack. The consumer only logs, never affects state, and is switched off with `kibo.messaging.audit-consumer-enabled=false` (then events stay visible in the queue). |
 | Flyway (not in the requested stack) | CHECK constraints, unique key and indexes are part of the correctness design and must be versioned | `ddl-auto` can't reliably create CHECK constraints or named indexes, and isn't safe for repeatable schemas. |
 | Testcontainers (not in the requested stack) | Constitution XIII requires DB-level concurrency to be proven against real MySQL | H2 lacks MySQL's locking semantics, so it would give false confidence in no-oversell. |

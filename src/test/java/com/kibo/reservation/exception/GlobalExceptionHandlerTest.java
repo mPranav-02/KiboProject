@@ -10,6 +10,15 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import java.sql.SQLException;
+import java.sql.SQLNonTransientConnectionException;
+import java.util.stream.Stream;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
+import org.springframework.dao.CannotAcquireLockException;
+import org.springframework.dao.QueryTimeoutException;
+import org.springframework.dao.TransientDataAccessResourceException;
+import org.springframework.transaction.TransactionSystemException;
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
@@ -177,6 +186,38 @@ class GlobalExceptionHandlerTest {
         assertThat(keyValues(entry)).containsEntry("code", "SERVICE_UNAVAILABLE").containsEntry("status", "503")
                 .containsEntry("customerId", "alice").containsEntry("holdId", id.toString())
                 .containsEntry("exception", "DataAccessResourceFailureException");
+    }
+
+    @ParameterizedTest
+    @MethodSource("transientDatabaseFailures")
+    void transientDatabaseFailuresAre503SoTheClientCanRetry(RuntimeException failure) throws Exception {
+        when(holdService.getHold(any(), any())).thenThrow(failure);
+
+        mvc.perform(get("/api/v1/holds/{id}", UUID.randomUUID()).header(ApiHeaders.CUSTOMER_ID, "alice"))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.code").value("SERVICE_UNAVAILABLE"));
+    }
+
+    static Stream<RuntimeException> transientDatabaseFailures() {
+        return Stream.of(
+                new CannotAcquireLockException("deadlock victim"),
+                new QueryTimeoutException("query timed out"),
+                new TransientDataAccessResourceException("resource busy"),
+                // A commit whose connection dropped (Connector/J reports SQLState 08S01).
+                new TransactionSystemException("Could not commit JPA transaction",
+                        new SQLException("Communications link failure", "08S01")),
+                new TransactionSystemException("Could not commit JPA transaction",
+                        new SQLNonTransientConnectionException("connection closed")));
+    }
+
+    @Test
+    void aCommitFailureNotCausedByTheConnectionIsStill500() throws Exception {
+        when(holdService.getHold(any(), any())).thenThrow(
+                new TransactionSystemException("Could not commit", new IllegalStateException("bug")));
+
+        mvc.perform(get("/api/v1/holds/{id}", UUID.randomUUID()).header(ApiHeaders.CUSTOMER_ID, "alice"))
+                .andExpect(status().isInternalServerError())
+                .andExpect(jsonPath("$.code").value("INTERNAL_ERROR"));
     }
 
     @Test

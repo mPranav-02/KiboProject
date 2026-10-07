@@ -8,15 +8,24 @@ Data and state rules: [data-model.md](./data-model.md).
 - Docker Desktop (or Docker Engine) with Compose v2.
 - JDK 21 and Maven 3.9+, only needed to run tests or the app outside Docker.
 
-## 1. Configure
+## 1. Configure (optional)
+
+Nothing to do for a first run: `docker compose` reads the committed, local-only placeholders in
+`.env.example`. To change a value (or to set `KIBO_HOLD_DURATION`, see §5), override it in `.env`:
 
 ```bash
-cp .env.example .env        # local-only values; .env is gitignored
+cp .env.example .env        # gitignored; any value here wins over .env.example
 ```
 
-`.env` supplies `DB_URL`, `DB_USERNAME`, `DB_PASSWORD`, `MYSQL_ROOT_PASSWORD`, `REDIS_HOST`,
-`REDIS_PORT`, `RABBITMQ_HOST`, `RABBITMQ_USERNAME` and `RABBITMQ_PASSWORD`. Nothing is hardcoded in
-`application.yml`.
+The variables are `DB_URL`, `DB_USERNAME`, `DB_PASSWORD`, `MYSQL_ROOT_PASSWORD`, `REDIS_HOST`, `REDIS_PORT`,
+`REDIS_PASSWORD`, `RABBITMQ_HOST`, `RABBITMQ_PORT`, `RABBITMQ_USERNAME` and `RABBITMQ_PASSWORD`. Nothing is
+hardcoded in `application.yml`; a missing variable fails startup.
+
+**Running the app outside Docker (IDE):** the compose stack publishes only RabbitMQ's ports, and the hosts in
+`.env.example` are compose service names, so the app can't reach MySQL or Redis from the host as-is. Run the
+app in compose (above), or add `ports` for `mysql` (3306) and `redis` (6379) in a local
+`docker-compose.override.yml`, then export the variables with `localhost` hosts and start the app with
+`SPRING_PROFILES_ACTIVE=local` (logs the executed SQL).
 
 ## 2. Run everything
 
@@ -78,8 +87,10 @@ curl -s localhost:8080/actuator/health/readiness   # still UP (readiness depends
 docker compose start redis rabbitmq
 ```
 
-To see events: the RabbitMQ management UI at http://localhost:15672 (credentials from `.env`) shows
-messages in queue `kibo.holds.audit` ([contracts/events.md](./contracts/events.md)).
+To see events ([contracts/events.md](./contracts/events.md)): a demo consumer reads queue `kibo.holds.audit`
+and logs every event, so they appear in `docker compose logs app` as `AUDIT HOLD_CREATED eventId=...` lines, and the queue in
+the RabbitMQ management UI (http://localhost:15672, credentials from `.env.example`) stays empty. To keep
+messages in the queue instead, set `KIBO_MESSAGING_AUDIT_CONSUMER_ENABLED=false` in `.env` and restart.
 
 ## 7. Automated tests
 

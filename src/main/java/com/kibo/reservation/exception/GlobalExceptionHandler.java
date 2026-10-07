@@ -5,6 +5,9 @@ import com.kibo.reservation.api.dto.CreateHoldRequest;
 import com.kibo.reservation.domain.exception.DomainException;
 import com.kibo.reservation.domain.exception.ErrorCode;
 import jakarta.servlet.http.HttpServletRequest;
+import java.sql.SQLException;
+import java.sql.SQLNonTransientConnectionException;
+import java.sql.SQLTransientConnectionException;
 import java.time.Clock;
 import java.util.ArrayList;
 import java.util.List;
@@ -13,7 +16,7 @@ import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataAccessResourceFailureException;
-import org.springframework.dao.PessimisticLockingFailureException;
+import org.springframework.dao.TransientDataAccessException;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
@@ -25,6 +28,7 @@ import org.springframework.web.method.annotation.HandlerMethodValidationExceptio
 import org.springframework.web.servlet.HandlerMapping;
 import org.springframework.web.context.request.ServletWebRequest;
 import org.springframework.transaction.CannotCreateTransactionException;
+import org.springframework.transaction.TransactionSystemException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.context.request.WebRequest;
@@ -58,12 +62,13 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     }
 
     /**
-     * The database (source of truth) is unreachable, or a lock could not be acquired in time (lock wait
-     * timeout / deadlock victim). The transaction was rolled back, nothing was changed, and the request can
-     * be retried safely.
+     * The database (source of truth) is unreachable, or a transient database failure occurred: lock wait
+     * timeout, deadlock victim, query timeout, a resource that may work on retry ({@link TransientDataAccessException}
+     * covers all of these). The transaction was rolled back, nothing was changed, and the request can be
+     * retried safely.
      */
     @ExceptionHandler({DataAccessResourceFailureException.class, CannotCreateTransactionException.class,
-            PessimisticLockingFailureException.class})
+            TransientDataAccessException.class})
     public ResponseEntity<ProblemDetail> handleDatabaseUnavailable(Exception ex, WebRequest request) {
         requestContext(log.atWarn(), request)
                 .addKeyValue("code", ErrorCode.SERVICE_UNAVAILABLE.name())
@@ -73,6 +78,31 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
         ProblemDetail problem = problem(ErrorCode.SERVICE_UNAVAILABLE,
                 "The service is temporarily unavailable. Please retry.");
         return ResponseEntity.status(problem.getStatus()).body(problem);
+    }
+
+    /**
+     * A commit that failed and could not be translated to a {@code DataAccessException}. When the cause is a lost
+     * or refused connection, it's a database outage like any other (503, safe to retry, because a commit that did
+     * not complete leaves the transaction rolled back by InnoDB); anything else is unexpected (500).
+     */
+    @ExceptionHandler(TransactionSystemException.class)
+    public ResponseEntity<ProblemDetail> handleTransactionSystem(TransactionSystemException ex, WebRequest request) {
+        return causedByLostConnection(ex) ? handleDatabaseUnavailable(ex, request) : handleUnexpected(ex, request);
+    }
+
+    static boolean causedByLostConnection(Throwable ex) {
+        for (Throwable cause = ex; cause != null; cause = cause.getCause() == cause ? null : cause.getCause()) {
+            if (cause instanceof SQLTransientConnectionException || cause instanceof SQLNonTransientConnectionException
+                    || cause instanceof DataAccessResourceFailureException
+                    || cause instanceof org.hibernate.exception.JDBCConnectionException) {
+                return true;
+            }
+            // SQLState class 08 = connection exception (SQL standard), e.g. MySQL Connector/J "communications link failure".
+            if (cause instanceof SQLException sql && sql.getSQLState() != null && sql.getSQLState().startsWith("08")) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** Anything unexpected: logged in full, but only a generic message is returned. */
