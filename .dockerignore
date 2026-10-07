@@ -1,0 +1,9 @@
+# The image build only needs pom.xml and src/ (see Dockerfile); keep everything else out of the context.
+.git/
+target/
+.idea/
+.vscode/
+.env*
+*.log
+*.tgz
+.DS_Store

@@ -1,0 +1,12 @@
+# ---------------------------------------------------------------------------
+# LOCAL DEVELOPMENT ONLY. Activate with SPRING_PROFILES_ACTIVE=local when running the app
+# from the IDE against the docker compose infrastructure.
+# Infrastructure hosts/credentials still come from the environment (see .env.example).
+# ---------------------------------------------------------------------------
+
+logging:
+  level:
+    # Show the SQL actually executed, so the conditional/guarded UPDATEs can be inspected
+    # during AI-code review (Constitution XVI).
+    org.hibernate.SQL: debug
+    com.kibo.reservation: debug

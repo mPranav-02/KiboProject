@@ -1,0 +1,91 @@
+# All infrastructure hosts, ports and credentials come from the environment (Constitution XIV).
+# There are deliberately no defaults for them: a missing variable fails startup instead of
+# silently connecting somewhere unexpected. See .env.example for local-only placeholder values.
+
+spring:
+  application:
+    name: kibo-reservation
+
+  datasource:
+    url: ${DB_URL}
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}
+    hikari:
+      # Correctness relies on conditional updates, not isolation; READ COMMITTED avoids
+      # InnoDB gap/next-key locks (research.md §4).
+      transaction-isolation: TRANSACTION_READ_COMMITTED
+
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC
+        type:
+          # Map java.time.Instant to plain TIMESTAMP (MySQL DATETIME(6)), stored in UTC via time_zone above.
+          preferred_instant_jdbc_type: TIMESTAMP
+
+  data:
+    redis:
+      host: ${REDIS_HOST}
+      port: ${REDIS_PORT}
+      password: ${REDIS_PASSWORD}
+      # Short timeouts: Redis is only a cache, so a slow Redis must never make reads or writes slow.
+      connect-timeout: 500ms
+      timeout: 200ms
+
+  rabbitmq:
+    host: ${RABBITMQ_HOST}
+    port: ${RABBITMQ_PORT}
+    username: ${RABBITMQ_USERNAME}
+    password: ${RABBITMQ_PASSWORD}
+    # RabbitMQ only carries after-the-fact events, so a dead broker must fail fast and never matter.
+    connection-timeout: 1s
+    # Ask the broker to confirm each publish, so the publisher can tell "accepted" from "lost" (it still never retries).
+    publisher-confirm-type: correlated
+    listener:
+      simple:
+        # A message the demo consumer cannot process is dropped, not redelivered forever.
+        default-requeue-rejected: false
+
+kibo:
+  hold:
+    duration: PT5M
+    default-max-per-hold: 4
+  expiration:
+    interval: PT2S
+    batch-size: 200
+  cache:
+    drop-ttl: PT3S
+  seed:
+    enabled: true
+  messaging:
+    # Hold lifecycle events (docs/messaging-rabbitmq.md). Broker host/credentials are RABBITMQ_* above.
+    enabled: true
+    exchange: kibo.holds
+    audit-queue: kibo.holds.audit
+    audit-consumer-enabled: true
+
+logging:
+  structured:
+    format:
+      console: ecs
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      # Component status (db, redis, rabbit, ...) is visible in /actuator/health; details stay hidden.
+      show-components: always
+      # Serves /actuator/health/readiness and /liveness (the compose healthcheck uses readiness).
+      probes:
+        enabled: true
+      group:
+        # Readiness depends on MySQL only, so Redis/RabbitMQ outages don't mark the service unready (FR-027, FR-032).
+        readiness:
+          include: db
